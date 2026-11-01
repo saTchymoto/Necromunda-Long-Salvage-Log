@@ -1,0 +1,19 @@
+rules_version = '2';
+// The Long Salvage battle log: only the campaign's players may read or write, and only the log's three collections.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isPlayer() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower() in [
+          'PLAYER1@gmail.com',
+          'PLAYER2@gmail.com',
+          'PLAYER3@gmail.com',
+          'PLAYER4@gmail.com'
+        ];
+    }
+    match /{collection}/{docId} {
+      allow read, write: if isPlayer() && collection in ['gangs', 'battles', 'territories'];
+    }
+  }
+}
