@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101141125";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101143423";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -67,6 +67,11 @@ header.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; j
 .save-state { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .restore-box { flex-basis: 100%; display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); text-align: left; font-size: .86rem; }
 .restore-rows { display: grid; gap: 2px; max-height: 320px; overflow: auto; }
+.act-box { max-height: 70vh; overflow: auto; }
+.act-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.act-list > li { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; }
+.act-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: .86rem; }
+.act-list ul { margin: 2px 0 0; padding-left: 18px; font-size: .84rem; color: var(--ink); }
 div.restore-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 6px; font-size: .84rem; }
 @media (max-width: 640px) { div.restore-row { grid-template-columns: minmax(0, 1fr) auto; } div.restore-row > .muted { grid-column: 1 / -1; grid-row: 2; } }
 label.restore-row { cursor: pointer; display: grid; grid-template-columns: 18px 130px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: var(--r); font-size: .84rem; }
@@ -600,6 +605,7 @@ td.total { font-weight: 600; color: var(--ok); }
         <button data-act="saveBackup" title="Save all battles, rosters and territories to a file">Save backup</button>
         <button data-act="loadBackup" title="Compare a backup file with this log, then choose what to take from it">Load backup</button>
         <button data-act="rpList" id="rp-btn" title="Daily snapshots of the whole log, kept for 14 days" hidden>Restore points</button>
+        <button data-act="actList" id="act-btn" title="Who changed what in the log, newest first" hidden>Log record</button>
         <input type="file" id="backup-file" accept=".json,application/json" hidden>
       </span>
       <div class="save-state" id="save-state" role="status"><span class="dot"></span><span id="save-text">Connecting…</span></div>
@@ -1110,6 +1116,134 @@ function upgradeBackup(d) {
 /* Online: one-time data fixes run once, by the first browser that loads a version containing them, and are recorded
    in the map settings record. The first time this runs it only records today's fixes as done (they were applied already). */
 let onlinePatched = false;
+/* ---------- log record (hosted version) ----------
+   Every save is compared with the version before it and written to activity/<id> as plain sentences, with who did it.
+   Edits by the same person to the same record within ACT_JOIN_MS go into one entry; bulk work (loading a backup or a
+   restore point, automatic data updates, setting up the map) is one summary entry. */
+const ACT_JOIN_MS = 2 * 60 * 1000, ACT_KEEP_DAYS = 365;
+let actNote = ""; const actWhy = {}, actBuf = {};
+const ACT_LABEL = { date: "date", scenario: "scenario", kind: "battle type", location: "location", stake: "Territory at stake", winner: "winner", priority: "priority",
+  attacker: "attackers", defender: "defenders", gangs: "gangs in the battle", phase: "campaign phase", pre: "pre-battle notes", post: "post-battle notes",
+  visibility: "visibility", visibilityMode: "visibility", visibilitySource: "visibility imposed by", treachRoll: "Treacherous Conditions roll", treachExtra: "extra Treacherous Conditions rolls",
+  treachResult: "Treacherous Conditions notes", deployD6: "deployment roll", deployPick: "deployment", objectiveD6: "objective roll", objectivePick: "objective", crewD6: "crew roll", crewPick: "crew method",
+  leaderBonus: "leader bonus rule", participationXp: "participation XP", injuryTable: "injury table", report: "battle report", gainOverride: "Territory gained", noRounds: "rounds not recorded",
+  roundCount: "rounds", uneventful: "uneventful rounds", visRounds: "visibility rounds", sideJobs: "side jobs", roles: "gang roles", crews: "crews", challenger: "challenger", participants: "who took part",
+  credits: "credits", rep: "Rep", rating: "rating", wealth: "wealth", name: "name", short: "short name", player: "player", color: "colour", tactics: "gang tactics", type: "type", status: "status",
+  role: "role", note: "note", xp: "XP", mundaXp: "Munda XP", mundaDate: "Munda date", injuries: "injuries", owner: "holder", income: "income", boon: "boon", effect: "special rule text",
+  effectName: "special rule", repNow: "Rep this cycle", sheets: "post-cycle", territories: "territories", cycle: "cycle", events: "XP log", rewards: "rewards", actions: "actions", fighters: "fighters" };
+const ACT_SKIP = new Set(["updated", "id", "listOrder", "claimPick", "stakeOwner", "order", "rosterSynced", "applied", "done", "seeded", "lines", "crew"]);
+const fieldLabel = k => ACT_LABEL[k] || String(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+function actVal(v) {
+  if (v === undefined || v === null || v === "") return "nothing";
+  if (typeof v === "boolean") return v ? "on" : "off";
+  if (Array.isArray(v)) return v.length ? v.map(actVal).join(", ") : "nothing";
+  if (typeof v === "object") return "…";
+  const t = String(v);
+  if (FIDX[t]) return fname(t);
+  if (S.gangs[t]) return S.gangs[t].short || S.gangs[t].name;
+  if (S.territories[t]) return S.territories[t].name || t;
+  return t.length > 40 ? null : /^[\d.+-]+$/.test(t) ? t : `"${t}"`;
+}
+function actItem(listKey, x) {
+  if (!x || typeof x !== "object") return actVal(x);
+  if (listKey === "events") return `${fname(x.by)} ${actName(x.action) || "?"}${x.target ? " → " + fname(x.target) : x.objective ? " " + x.objective : ""}${x.result ? " (" + resName(x.result) + ")" : ""}`;
+  if (listKey === "injuries") return `injury roll for ${fname(x.victim)}${x.roll ? ": " + x.roll : ""}`;
+  if (listKey === "rewards") return `${x.kind || "reward"} ${x.amount ?? ""} to ${x.fighter ? fname(x.fighter) : gName(x.gang) || "?"}${x.reason ? " " + x.reason : ""}`.replace(/\s+/g, " ");
+  if (listKey === "fighters") return x.name || "a fighter";
+  if (listKey === "actions") return `${x.kind || "action"}${x.fighter ? " for " + fname(x.fighter) : ""}`;
+  return x.name || x.title || x.kind || "an entry";
+}
+/* [key, sentence] pairs describing what changed between two versions of a record. */
+function actDiff(kind, before, after, prefix = "") {
+  const out = [], seen = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  for (const k of seen) {
+    if (ACT_SKIP.has(k)) continue;
+    const a = before?.[k], b = after?.[k]; if (stable(a) === stable(b)) continue;
+    const key = prefix + k, lab = prefix ? `${prefix.replace(/[.:]$/, "")} – ${fieldLabel(k)}` : fieldLabel(k);
+    if (k === "claim") { out.push([key, b?.tid ? `${gName(b.to)} ${b.historic ? "recorded taking" : "takes"} ${S.territories[b.tid]?.name || "?"}` : "territory change undone"]); continue; }
+    if (k === "sheets" || k === "crews" || k === "sideJobs" || k === "roles") {
+      for (const g of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) if (stable(a?.[g]) !== stable(b?.[g])) {
+        const who = S.gangs[g] ? (S.gangs[g].short || S.gangs[g].name) : g;
+        if (a?.[g] && b?.[g] && typeof b[g] === "object" && !Array.isArray(b[g])) out.push(...actDiff(kind, a[g], b[g], `${fieldLabel(k)} (${who}):`));
+        else out.push([key + g, `${fieldLabel(k)} (${who}) ${!a?.[g] ? "added" : !b?.[g] ? "removed" : "changed"}`]);
+      }
+      continue;
+    }
+    if (Array.isArray(a) || Array.isArray(b)) {
+      const A = a || [], B = b || [];
+      if ([...A, ...B].every(x => x && typeof x === "object" && x.id)) {
+        const am = new Map(A.map(x => [x.id, x])), bm = new Map(B.map(x => [x.id, x]));
+        for (const [id, x] of bm) if (!am.has(id)) out.push([key + "+" + id, `added ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
+        for (const [id, x] of am) if (!bm.has(id)) out.push([key + "-" + id, `removed ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
+        for (const [id, x] of bm) { const y = am.get(id); if (!y || stable(x) === stable(y)) continue;
+          const f = Object.keys({ ...x, ...y }).filter(f => !ACT_SKIP.has(f) && stable(x[f]) !== stable(y[f]));
+          out.push([key + "~" + id, `changed ${actItem(k, x)}: ${f.map(f => { const v = actVal(x[f]); return v ? `${fieldLabel(f)} → ${v}` : fieldLabel(f); }).join(", ")}`]); }
+        continue;
+      }
+      const add = B.filter(x => !A.some(y => stable(y) === stable(x))), del = A.filter(x => !B.some(y => stable(y) === stable(x)));
+      out.push([key, `${lab}: ${[add.length ? "added " + add.map(actVal).join(", ") : "", del.length ? "removed " + del.map(actVal).join(", ") : ""].filter(Boolean).join("; ") || "reordered"}`]);
+      continue;
+    }
+    if (a && b && typeof a === "object" && typeof b === "object") { out.push(...actDiff(kind, a, b, `${lab}:`)); continue; }
+    const v = actVal(b); out.push([key, v === null ? `edited ${lab}` : `${lab} → ${v}`]);
+  }
+  return out;
+}
+function actTitle(kind, rec) {
+  if (!rec) return "?";
+  if (kind === "battles") return isPC(rec) ? `Post-cycle · ${/cycle/i.test(rec.cycle || "") ? rec.cycle : "Cycle " + (rec.cycle || "?")}` : `${battleTitle(rec)} (${fmtDate(rec.date)})`;
+  return recLabel(kind, rec);
+}
+/* Called after a record has been saved: before/after are the versions this person changed from and to. */
+function logActivity(kind, id, before, after, why) {
+  if (!HOSTED || S.mode !== "db" || !db) return;
+  const user = window.firebase?.auth?.().currentUser; if (!user) return;
+  const now = Date.now(), title = actTitle(kind, after || before);
+  let key, lines;
+  if (why) { key = "why:" + why; lines = [["r:" + kind + id, title]]; }
+  else {
+    key = kind + "/" + id;
+    lines = !before ? [["created", kind === "battles" ? (isPC(after) ? "started a post-cycle" : isReport(after) ? "started a battle report" : "started a battle") : "added"]]
+      : !after ? [["deleted", "deleted"]] : actDiff(kind, before, after);
+    if (!lines.length) return;
+  }
+  let buf = actBuf[key];
+  if (!buf || now - buf.t > ACT_JOIN_MS) buf = actBuf[key] = { doc: `${new Date(now).toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 7)}`, start: new Date(now).toISOString(), lines: new Map() };
+  buf.t = now; for (const [k, t] of lines) { buf.lines.delete(k); buf.lines.set(k, t); }
+  const all = [...buf.lines.values()];
+  const rec = why ? { at: buf.start, last: new Date(now).toISOString(), by: user.displayName || user.email, email: user.email, kind: "bulk", rid: "", title: why,
+      lines: [`${all.length} record${all.length === 1 ? "" : "s"}: ${all.slice(0, 40).join(", ")}${all.length > 40 ? ", …" : ""}`] }
+    : { at: buf.start, last: new Date(now).toISOString(), by: user.displayName || user.email, email: user.email, kind, rid: id, title, lines: all.slice(-60) };
+  db.doc("activity/" + buf.doc).set(rec).catch(() => {});
+}
+let actView = null;
+async function showActivity(more) {
+  const el = $("#restore-confirm"); el.hidden = false;
+  if (!more) { actView = { docs: [], last: null, who: actView?.who || "" }; el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Loading…</span></div>`; }
+  try {
+    let q = db.collection("activity").orderBy("at", "desc").limit(150);
+    if (more && actView.last) q = q.startAfter(actView.last);
+    const snap = await q.get(); actView.docs.push(...snap.docs.map(d => d.data())); actView.last = snap.docs[snap.docs.length - 1] || actView.last; actView.done = snap.docs.length < 150;
+    renderActivity();
+  } catch (e) { el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Couldn't load the log record${e?.code === "permission-denied" ? ": the database rules don't allow it yet" : ""}.</span><div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`; }
+}
+function renderActivity() {
+  const el = $("#restore-confirm"), v = actView, people = [...new Set(v.docs.map(d => d.by).filter(Boolean))].sort();
+  const list = v.docs.filter(d => !v.who || d.by === v.who);
+  const when = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
+  el.innerHTML = `<div class="restore-box act-box">
+    <div class="toolbar" style="justify-content:space-between"><b>Log record</b>
+      <label class="check">Show <select id="act-who" aria-label="Whose changes to show"><option value="">Everyone</option>${people.map(p => `<option${p === v.who ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label></div>
+    ${list.length ? `<ol class="act-list">${list.map(d => `<li><div class="act-head"><span class="mono muted">${esc(when(d.at))}</span><b>${esc(d.by || "?")}</b>
+        ${d.kind === "battles" && S.battles[d.rid] ? `<button class="linkish" data-act="openBattle" data-id="${esc(d.rid)}">${esc(d.title)}</button>` : `<span>${esc(d.title || "")}</span>`}</div>
+        <ul>${(d.lines || []).map(t => `<li>${esc(t)}</li>`).join("")}</ul></li>`).join("")}</ol>` : `<p class="muted" style="margin:0">Nothing recorded yet.</p>`}
+    <div class="toolbar" style="justify-content:flex-end">${v.done ? "" : `<button data-act="actMore">Show older</button>`}<button data-act="cancelRestore">Close</button></div></div>`;
+  $("#act-who").onchange = e => { actView.who = e.target.value; renderActivity(); };
+}
+async function pruneActivity() {
+  try { const cut = new Date(Date.now() - ACT_KEEP_DAYS * 864e5).toISOString();
+    const old = await db.collection("activity").where("at", "<", cut).limit(200).get(); for (const d of old.docs) await db.doc("activity/" + d.id).delete(); } catch (e) {}
+}
 /* ---------- automatic restore points (hosted version) ----------
    Once a day the first person to open the log saves a snapshot of everything (gzip-compressed) to restorepoints/<date>.
    The last RP_KEEP days are kept. "Restore points" lists them; picking one opens the usual compare / replace screen. */
@@ -1137,6 +1271,7 @@ async function makeRestorePoint() {
     await db.runTransaction(async t => { if (!(await t.get(ref)).exists) t.set(ref, rec); });
     const ids = (await db.collection("restorepoints").get()).docs.map(d => d.id).sort();
     for (const old of ids.slice(0, Math.max(0, ids.length - RP_KEEP))) await db.doc("restorepoints/" + old).delete();
+    await pruneActivity();
   } catch (e) { /* e.g. the database rules don't allow restore points yet: the log works the same without them */ }
 }
 async function showRestorePoints() {
@@ -1155,21 +1290,23 @@ async function loadRestorePoint(id) {
   try {
     const snap = await db.doc("restorepoints/" + id).get(); if (!snap.exists) { toast("That restore point is gone"); return; }
     const r = snap.data(), data = JSON.parse(r.gz ? await gunzipText(r.gz) : r.json);
-    const d = { app: "long-salvage-log", version: 1, saved: r.saved, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: {} };
+    const d = { app: "long-salvage-log", version: 1, saved: r.saved, restorePoint: id, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: {} };
     upgradeBackup(d); renderRestore(d);
   } catch (e) { toast("Couldn't open that restore point"); }
 }
 function runOnlinePatches() {
   if (onlinePatched || S.mode !== "db" || !S.loaded || !S.territories._meta) return;
   onlinePatched = true;
-  if (HOSTED) { $("#rp-btn").hidden = false; setTimeout(makeRestorePoint, 8000); }
+  if (HOSTED) { $("#rp-btn").hidden = false; $("#act-btn").hidden = false; setTimeout(makeRestorePoint, 8000); }
   const m = S.territories._meta;
   if (!Array.isArray(m.applied)) { m.applied = ROSTER_PATCHES.map(p => p.id); save("territories", "_meta"); return; }
   const snap = {}; for (const k of ["gangs", "battles", "territories"]) for (const [id, v] of Object.entries(S[k])) snap[k + "/" + id] = stable(v);
   S.config ||= {}; S.config.applied = [...m.applied];
   if (!applyRosterPatches()) return;
+  actNote = "Automatic data update from a new version of the log";
   m.applied = S.config.applied; save("territories", "_meta");
   for (const k of ["gangs", "battles", "territories"]) for (const [id, v] of Object.entries(S[k])) if (snap[k + "/" + id] !== stable(v)) save(k, id);
+  actNote = "";
   reindex(); render();
 }
 function lastBackupText() {
@@ -1241,6 +1378,8 @@ function applyRestore(all) {
   const { d, rows } = p, online = S.mode === "db";
   /* Online every record taken from the backup (or deleted because the backup doesn't have it) is saved to the shared log.
      The map settings record (_meta) is never deleted online: it tracks which one-time fixes have run. */
+  actNote = d.restorePoint ? `Restored from the restore point of ${fmtDate(d.restorePoint)}` : all ? "Replaced everything from a backup" : "Took records from a backup";
+  setTimeout(() => { actNote = ""; }, 0);
   const take = r => { const rec = d[r.kind]?.[r.id]; if (!rec && online && r.kind === "territories" && r.id === "_meta") return;
     if (rec) S[r.kind][r.id] = rec; else delete S[r.kind][r.id]; if (online) save(r.kind, r.id); };
   if (all && !online) { S.gangs = d.gangs; S.battles = d.battles; S.territories = d.territories || S.territories; S.config = d.config || {}; }
@@ -1270,6 +1409,7 @@ function save(kind, id) {
   if (kind === "gangs") reindex();
   if (S.mode !== "db") { clearTimeout(timers.local); timers.local = setTimeout(snapshotLocal, 300); return; }
   const path = kind + "/" + id;
+  if (actNote) actWhy[path] = actNote;
   dirty[path] = true; setSave("busy", "Saving…");
   clearTimeout(timers[path]);
   timers[path] = setTimeout(() => flush(path), 650);
@@ -1278,6 +1418,8 @@ function flush(path) {
   delete timers[path];
   const [kind, id] = path.split("/");
   const obj = S[kind][id];
+  const why = actWhy[path]; delete actWhy[path];
+  const before = lastKnown[path] ? JSON.parse(lastKnown[path]) : null, afterRec = obj ? JSON.parse(JSON.stringify(obj)) : null;
   const run = async () => {
     const ref = db.doc(path);
     /* Hosted (Firebase): save inside a transaction that first reads what's in the database right now and merges it with ours,
@@ -1301,7 +1443,7 @@ function flush(path) {
     try { await attempt(); } catch (e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 600)); await attempt(); } else throw e; }
     lastKnown[path] = obj ? JSON.stringify(obj) : null;
   };
-  chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => {
+  chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
     if (!timers[path]) dirty[path] = false;
     if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved");
   }).catch(e => {
@@ -1406,7 +1548,7 @@ async function boot() {
     let terrFirst = true;
     db.collection("territories").onSnapshot(s => {
       const c = applySnap("territories", s);
-      if (terrFirst) { terrFirst = false; if (s.docChanges().length === 0 && !Object.keys(S.territories).length) { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; for (const id of Object.keys(S.territories)) save("territories", id); render(); return; } }
+      if (terrFirst) { terrFirst = false; if (s.docChanges().length === 0 && !Object.keys(S.territories).length) { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; actNote = "Set up the campaign map"; for (const id of Object.keys(S.territories)) save("territories", id); actNote = ""; render(); return; } }
       const m = S.territories._meta;
       if (m && !(m.done || []).includes("toll")) { for (const id of migrateTolls()) save("territories", id); m.done = [...(m.done || []), "toll"]; save("territories", "_meta"); if (S.loaded) render(); return; }
       if (c && S.loaded) render();
@@ -4651,6 +4793,8 @@ function act(a, el) {
     case "saveBackup": saveBackup(); return;
     case "loadBackup": $("#backup-file").value = ""; $("#backup-file").click(); return;
     case "rpList": showRestorePoints(); return;
+    case "actList": showActivity(false); return;
+    case "actMore": showActivity(true); return;
     case "rpLoad": loadRestorePoint(id); return;
     case "confirmRestore": applyRestore(false); return;
     case "replaceRestore": applyRestore(true); return;
