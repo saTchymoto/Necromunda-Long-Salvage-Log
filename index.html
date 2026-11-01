@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101132618";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101134716";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1155,6 +1155,8 @@ function recLabel(kind, d) {
   return `${fmtDate(d.date)} · ${battleTitle(d)}`;
 }
 function backupDiff(d) {
+  /* A brand-new log (no gangs or battles yet, only the map it set up itself) takes everything from the backup by default. */
+  const fresh = !Object.keys(S.gangs || {}).length && !Object.keys(S.battles || {}).length;
   const rows = [];
   for (const kind of ["battles", "gangs", "territories"]) {
     const A = S[kind] || {}, B = d[kind] || {};
@@ -1163,7 +1165,7 @@ function backupDiff(d) {
       if (a && b && stable(a) === stable(b)) continue;
       const ta = a?.updated || "", tb = b?.updated || d.saved || "";
       const newer = !a ? "backup" : !b ? "here" : ta && tb ? (tb > ta ? "backup" : tb < ta ? "here" : "same") : "unknown";
-      rows.push({ kind, id, label: recLabel(kind, b || a), state: !a ? "new" : !b ? "only" : "changed", newer, use: !b ? false : newer !== "here" });
+      rows.push({ kind, id, label: recLabel(kind, b || a), state: !a ? "new" : !b ? "only" : "changed", newer, use: !b ? false : fresh || newer !== "here" });
     }
   }
   return rows;
