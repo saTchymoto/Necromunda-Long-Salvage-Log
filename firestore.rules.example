@@ -13,7 +13,7 @@ service cloud.firestore {
         ];
     }
     match /{collection}/{docId} {
-      allow read, write: if isPlayer() && collection in ['gangs', 'battles', 'territories'];
+      allow read, write: if isPlayer() && collection in ['gangs', 'battles', 'territories', 'restorepoints'];
     }
   }
 }

@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101134716";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101141125";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -67,6 +67,8 @@ header.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; j
 .save-state { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .restore-box { flex-basis: 100%; display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); text-align: left; font-size: .86rem; }
 .restore-rows { display: grid; gap: 2px; max-height: 320px; overflow: auto; }
+div.restore-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 6px; font-size: .84rem; }
+@media (max-width: 640px) { div.restore-row { grid-template-columns: minmax(0, 1fr) auto; } div.restore-row > .muted { grid-column: 1 / -1; grid-row: 2; } }
 label.restore-row { cursor: pointer; display: grid; grid-template-columns: 18px 130px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 4px 6px; border-radius: var(--r); font-size: .84rem; }
 label.restore-row:hover { background: var(--sunk); }
 .restore-row .neg { color: var(--ooa); }
@@ -597,6 +599,7 @@ td.total { font-weight: 600; color: var(--ok); }
       <span class="toolbar" id="backup-tools" style="gap:6px" hidden>
         <button data-act="saveBackup" title="Save all battles, rosters and territories to a file">Save backup</button>
         <button data-act="loadBackup" title="Compare a backup file with this log, then choose what to take from it">Load backup</button>
+        <button data-act="rpList" id="rp-btn" title="Daily snapshots of the whole log, kept for 14 days" hidden>Restore points</button>
         <input type="file" id="backup-file" accept=".json,application/json" hidden>
       </span>
       <div class="save-state" id="save-state" role="status"><span class="dot"></span><span id="save-text">Connecting…</span></div>
@@ -1107,9 +1110,59 @@ function upgradeBackup(d) {
 /* Online: one-time data fixes run once, by the first browser that loads a version containing them, and are recorded
    in the map settings record. The first time this runs it only records today's fixes as done (they were applied already). */
 let onlinePatched = false;
+/* ---------- automatic restore points (hosted version) ----------
+   Once a day the first person to open the log saves a snapshot of everything (gzip-compressed) to restorepoints/<date>.
+   The last RP_KEEP days are kept. "Restore points" lists them; picking one opens the usual compare / replace screen. */
+const RP_KEEP = 14;
+const b64of = buf => { let s = "", a = new Uint8Array(buf); for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); };
+async function gzipText(text) {
+  if (!window.CompressionStream) return null;
+  return b64of(await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+}
+async function gunzipText(b64) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+}
+let rpMade = false;
+async function makeRestorePoint() {
+  if (rpMade || !HOSTED || S.mode !== "db" || !S.loaded || typeof db?.runTransaction !== "function") return;
+  rpMade = true;
+  try {
+    const id = localDay(), ref = db.doc("restorepoints/" + id);
+    if ((await ref.get()).exists) return;
+    const data = { gangs: S.gangs, battles: S.battles, territories: S.territories }, json = JSON.stringify(data), gz = await gzipText(json);
+    const who = window.firebase?.auth?.().currentUser;
+    const rec = { saved: new Date().toISOString(), by: who?.displayName || who?.email || "", counts: { gangs: Object.keys(S.gangs).length, battles: Object.keys(S.battles).length, territories: terrList().length },
+      gz: gz || "", json: gz ? "" : json };
+    await db.runTransaction(async t => { if (!(await t.get(ref)).exists) t.set(ref, rec); });
+    const ids = (await db.collection("restorepoints").get()).docs.map(d => d.id).sort();
+    for (const old of ids.slice(0, Math.max(0, ids.length - RP_KEEP))) await db.doc("restorepoints/" + old).delete();
+  } catch (e) { /* e.g. the database rules don't allow restore points yet: the log works the same without them */ }
+}
+async function showRestorePoints() {
+  const el = $("#restore-confirm");
+  el.innerHTML = `<div class="restore-box"><b>Restore points</b><span class="muted">Loading…</span></div>`; el.hidden = false;
+  try {
+    const docs = (await db.collection("restorepoints").get()).docs.map(d => ({ id: d.id, ...d.data() })).sort((a, c) => c.id.localeCompare(a.id));
+    el.innerHTML = `<div class="restore-box">
+      <div><b>Restore points</b> <span class="muted">A snapshot of the whole log is saved automatically each day it's opened, and the last ${RP_KEEP} days are kept. Picking one shows what's different, and you choose what to take back.</span></div>
+      ${docs.length ? `<div class="restore-rows">${docs.map(r => `<div class="restore-row"><b>${esc(fmtDate(r.id))}</b><span class="muted">${esc(r.saved && !isNaN(new Date(r.saved)) ? new Date(r.saved).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + " · " : "")}${r.by ? esc(r.by) + " · " : ""}${r.counts?.battles ?? "?"} battles, ${r.counts?.gangs ?? "?"} gangs</span><button data-act="rpLoad" data-id="${esc(r.id)}">Compare &amp; restore</button></div>`).join("")}</div>`
+        : `<span class="muted">No restore points yet. The first one is made the next time the log is opened.</span>`}
+      <div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`;
+  } catch (e) { el.innerHTML = `<div class="restore-box"><b>Restore points</b><span class="muted">Couldn't load the restore points${e?.code === "permission-denied" ? ": the database rules don't allow them yet" : ""}.</span><div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`; }
+}
+async function loadRestorePoint(id) {
+  try {
+    const snap = await db.doc("restorepoints/" + id).get(); if (!snap.exists) { toast("That restore point is gone"); return; }
+    const r = snap.data(), data = JSON.parse(r.gz ? await gunzipText(r.gz) : r.json);
+    const d = { app: "long-salvage-log", version: 1, saved: r.saved, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: {} };
+    upgradeBackup(d); renderRestore(d);
+  } catch (e) { toast("Couldn't open that restore point"); }
+}
 function runOnlinePatches() {
   if (onlinePatched || S.mode !== "db" || !S.loaded || !S.territories._meta) return;
   onlinePatched = true;
+  if (HOSTED) { $("#rp-btn").hidden = false; setTimeout(makeRestorePoint, 8000); }
   const m = S.territories._meta;
   if (!Array.isArray(m.applied)) { m.applied = ROSTER_PATCHES.map(p => p.id); save("territories", "_meta"); return; }
   const snap = {}; for (const k of ["gangs", "battles", "territories"]) for (const [id, v] of Object.entries(S[k])) snap[k + "/" + id] = stable(v);
@@ -4597,6 +4650,8 @@ function act(a, el) {
     case "openPrint": openPrint(b, el.dataset.all === "1"); return;
     case "saveBackup": saveBackup(); return;
     case "loadBackup": $("#backup-file").value = ""; $("#backup-file").click(); return;
+    case "rpList": showRestorePoints(); return;
+    case "rpLoad": loadRestorePoint(id); return;
     case "confirmRestore": applyRestore(false); return;
     case "replaceRestore": applyRestore(true); return;
     case "cancelRestore": pendingRestore = null; $("#restore-confirm").hidden = true; return;
