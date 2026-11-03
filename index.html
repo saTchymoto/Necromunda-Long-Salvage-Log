@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261101143423";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261103114304";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -254,6 +254,10 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .gate-card h1 { margin: 0; }
 .gate-card p { margin: 0; color: var(--muted); }
 .update-bar { position: sticky; top: 0; z-index: 90; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.avail-note { padding: 8px 10px; border-left: 3px solid var(--si); background: var(--sunk); border-radius: var(--r); font-size: .84rem; display: grid; gap: 4px; }
+.avail-warn { color: var(--ooa); font-weight: 600; }
+.avail-tag { margin-top: 3px; }
+.avail-tag .tag { font-size: .66rem; }
 .rule-src { font-size: .78rem; color: var(--muted); white-space: nowrap; }
 .stake-warn { margin-top: 6px; padding: 6px 8px; border-left: 3px solid var(--ooa); background: var(--special-bg); color: var(--ink); font-weight: 500; font-size: .8rem; border-radius: var(--r); }
 .map-phase { display: inline-flex; gap: 6px; align-items: center; font-size: .8rem; color: var(--muted); }
@@ -1601,8 +1605,9 @@ function fighterOptions(b, selected, opts = {}) {
     for (const f of g.fighters || []) {
       if (isGone(f) && f.id !== selected && !opts.all) continue;
       if (opts.skip && f.id !== selected && opts.skip(f.id)) continue;
+      const ua = !isPC(b) && unavailIn(b, f.id); if (ua && f.id !== selected) continue;
       if (b.location === "hive" && f.id !== selected && ["crew", "vehicle"].includes(f.role)) continue;
-      const tag = f.status === "dead" ? " †" : f.status === "sold" ? " (sold)" : f.status === "captured" ? " (captured)" : (f.role === "leader" ? " ★" : f.role === "champion" ? " ☆" : "");
+      const tag = ua ? ` (${availText(ua, true).toLowerCase()})` : f.status === "dead" ? " †" : f.status === "sold" ? " (sold)" : f.status === "captured" ? " (captured)" : (f.role === "leader" ? " ★" : f.role === "champion" ? " ☆" : "");
       h += `<option value="${esc(f.id)}"${f.id === selected ? " selected" : ""}>${esc(nameAt(f) + tag)}</option>`;
     }
     h += `</optgroup>`;
@@ -1643,6 +1648,7 @@ function markLineStarts() {
   }
 }
 function render() {
+  AVAIL = null;
   rendered = true;
   renderStrip();
   for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === S.tab));
@@ -2207,6 +2213,7 @@ function renderLog(b) {
     }).join("");
   } else body = evs.map(evRow).join("") + composer;
   return `<section class="block" aria-labelledby="h-log">
+    ${battleAvailNote(b)}
     <div class="block-head"><h2 id="h-log"><span class="step">2</span>Battle XP log</h2>
       ${newXpRules(b) ? `<span class="muted" style="font-size:.85rem">XP rules from ${esc(fmtDate(XP_RULES_FROM))}: +1 XP for taking a Leader, Champion, Brute or Vehicle Out of Action</span>` : `<label class="check"><input type="checkbox" id="b-ldr" data-bind="b.leaderBonus"${b.leaderBonus ? " checked" : ""}> +1 XP for taking a Leader or Champion Out of Action</label>`}</div>
     ${(b.gangs || []).length ? "" : `<p class="muted">Pick the gangs in this battle above to fill the fighter lists.</p>`}
@@ -2240,12 +2247,26 @@ function renderInjuries(b) {
       extra += `<input type="text" class="wide" id="in-${inj.id}-extra" aria-label="Extra injury rolls (D66 each)" data-bind="in.${inj.id}.extra" value="${esc(inj.extra)}" placeholder="Extra D66 rolls, e.g. 44, 52"><span>${ex}</span>`;
     }
     let capHtml = "";
+    if (b.avail && inj.victim && (name === "Critical Injury" || RECOVERY_RESULTS.has(name))) {
+      const next = availTimeline().find(x => isPC(x) && (x.date > b.date || (x.date === b.date)));
+      if (name === "Critical Injury") {
+        const a = next && pcActionsAll(next).find(a => a.kind === "medical" && a.target === inj.victim), r = a && medResult(a);
+        const outcome = !next ? `<span class="muted">Needs a Medical Escort in the next post-cycle, or ${esc(fname(inj.victim))} dies.</span>`
+          : !a ? `${resultTag("No Medical Escort yet", "ooa")}<button class="linkish" data-act="openBattle" data-id="${esc(next.id)}">Open the post-cycle of ${esc(fmtDate(next.date))}</button>`
+          : !r ? `${resultTag("Medical Escort: not rolled yet", "si")}<button class="linkish" data-act="openBattle" data-id="${esc(next.id)}">Open the post-cycle</button>`
+          : r.unpaid || r.row[3] === "dead" ? resultTag(r.unpaid ? "Not paid: dies" : "Complications: dies", "dead")
+          : resultTag(r.row[2] === "Stabilised" ? `Stabilised${r.inj ? ": " + r.inj[2] : ""} → Recovery` : "Full Recovery → Recovery", "si");
+        capHtml = `<div class="capture"><div class="extra"><span>Medical Escort</span><div class="dice">${outcome}</div></div>
+          <div class="effect">Out of everything until a Medical Escort in the next post-cycle (30 credits, then a D6). Saved fighters go into Recovery and miss their gang's first battle after it.</div></div>`;
+      } else capHtml = `<div class="capture"><div class="effect">${resultTag("Recovery", "si")} ${esc(fname(inj.victim))} misses their gang's next battle or post-cycle, whichever comes first, then is available again.</div></div>`;
+    }
     if (name === "Captured") {
       const e = escapeOf(inj), c = ransomCredits(inj);
       capHtml = `<div class="capture">
         <div class="extra"><span>Escape roll</span><div class="dice"><input type="text" inputmode="numeric" maxlength="1" id="in-${inj.id}-escape" aria-label="Escape roll (D6)" data-bind="in.${inj.id}.escape" value="${esc(inj.escape)}" placeholder="D6" style="width:44px"><button class="ghost" data-act="rollEscape" data-id="${inj.id}">Roll</button></div>
           ${e ? resultTag(e[2], e[3]) : `<span class="muted">Roll a D6 on the Escape Table</span>`}</div>
         ${e ? `<div class="effect">${esc(e[4])}</div>` : ""}
+        ${b.avail ? `<div class="effect muted">${!e ? "Out of everything until the Escape roll is made." : e[2] === "Daring Escape" ? "In Recovery: misses their gang's next battle or post-cycle." : e[2] === "Ransomed" ? "Captured until the next post-cycle. Paid: Recovery, missing the first battle after it. Not paid: dies." : ""}</div>` : ""}
         ${e && e[2] === "Ransomed" ? `
         <div class="extra"><span>Ransom D6×10</span><div class="dice"><input type="text" inputmode="numeric" maxlength="1" id="in-${inj.id}-ransomD6" aria-label="Ransom roll (D6 × 10 credits)" data-bind="in.${inj.id}.ransomD6" value="${esc(inj.ransomD6)}" placeholder="D6" style="width:44px"><button class="ghost" data-act="rollRansom" data-id="${inj.id}">Roll</button></div>
           <span class="mono">${c ? `= ${c} credits` : ""}</span></div>
@@ -2278,13 +2299,18 @@ function renderInjuries(b) {
   </section>`;
 }
 
+/* Fighters of the gangs in this battle who can't take part because of earlier injuries. */
+function battleAvailNote(b) {
+  const out = (b.gangs || []).flatMap(gid => (S.gangs[gid]?.fighters || []).map(f => [f, unavailIn(b, f.id)])).filter(([f, x]) => x && x.s !== "dead" && !isGone(f));
+  return out.length ? `<div class="avail-note" role="note"><b>Not available for this battle:</b>${out.map(([f, x]) => `<div>${gdot(S.gangs[FIDX[f.id]?.gang])}<b>${esc(nameAt(f))}</b> – ${esc(availText(x))}</div>`).join("")}</div>` : "";
+}
 function renderPost(b, realGangs) {
   const part = new Set(participants(b));
   const explicit = new Set(b.participants || []);
   const auto = new Set([...part].filter(id => !explicit.has(id)));
   const partChips = realGangs.map(gid => {
     const g = S.gangs[gid];
-    const chips = (g.fighters || []).filter(f => (!isGone(f) && !(b.location === "hive" && ["crew", "vehicle"].includes(f.role))) || part.has(f.id)).map(f => {
+    const chips = (g.fighters || []).filter(f => (!isGone(f) && !unavailIn(b, f.id) && !(b.location === "hive" && ["crew", "vehicle"].includes(f.role))) || part.has(f.id)).map(f => {
       const on = part.has(f.id), locked = auto.has(f.id);
       return `<button class="chip${locked ? " locked" : ""}" data-act="togglePart" data-id="${esc(f.id)}" aria-pressed="${on}" ${locked ? `title="In the XP log or injuries, so they took part"` : ""}>${esc(nameAt(f))}${canEarnXp(f.id) ? "" : `<span class="x">no XP</span>`}</button>`;
     }).join("");
@@ -3523,7 +3549,74 @@ function pcStash(b) {
 }
 const pcGang = b => S.gangs[b.gang] || null;
 const canAct = f => f && !isGone(f) && f.status !== "retired";
-const pcBlocked = f => f && (f.status === "convalescing" || f.status === "captured");
+/* ---------- fighter availability from injuries (battles and post-cycles created from 3 Nov 2026, b.avail) ----------
+   Worked out from the logged history, in date order (battles before a post-cycle on the same date):
+   - Recovery results (Grievous Wound, 51–56) and a Daring Escape: the fighter misses their gang's next battle OR next post-cycle,
+     whichever comes first, then is free again.
+   - Critical Injury: out of everything until a post-cycle. There a Medical Escort decides: Full Recovery or Stabilised = Recovery,
+     missing the gang's first battle after that post-cycle; Complications, not paying, or no Medical Escort at all = dead.
+   - Captured: out until the Escape roll. Executed = dead; Daring Escape = Recovery; Ransomed = captured until the next post-cycle,
+     where a paid ransom means Recovery (first battle after it) and an unpaid one means dead.
+   - Memorable Death: dead. */
+const RECOVERY_RESULTS = new Set(["Grievous Wound", "Eye Injury", "Hand Injury", "Hobbled", "Spinal Injury", "Enfeebled", "Head Injury"]);
+const pcActionsAll = pc => Object.values(pc.sheets || {}).flatMap(sh => sh?.actions || []).concat(pc.actions || []);
+function availTimeline() { return Object.values(S.battles).filter(b => b && b.date).sort((a, c) => a.date.localeCompare(c.date) || (isPC(a) ? 1 : 0) - (isPC(c) ? 1 : 0) || String(a.id).localeCompare(String(c.id))); }
+let AVAIL = null;
+function availability() {
+  if (AVAIL) return AVAIL;
+  const st = {}, before = {}, src = id => S.battles[id];
+  for (const E of availTimeline()) {
+    before[E.id] = JSON.parse(JSON.stringify(st));
+    const pc = isPC(E), inIt = new Set(pc ? Object.keys(S.gangs) : (E.gangs || []));
+    /* Recovery is served in this entry (if the fighter's gang is in it), then cleared. */
+    for (const [fid, x] of Object.entries(st)) if (x.s === "recovery" && inIt.has(FIDX[fid]?.gang) && !(x.battleOnly && pc)) delete st[fid];
+    if (pc) {
+      const acts = pcActionsAll(E);
+      for (const [fid, x] of Object.entries(st)) {
+        if (x.s === "critical") {
+          const a = acts.find(a => a.kind === "medical" && a.target === fid), r = a && medResult(a);
+          if (!a) st[fid] = { s: "dead", from: E.id, why: "Critical Injury not treated in the post-cycle" };
+          else if (!r) st[fid] = { ...x, pending: E.id };
+          else if (r.unpaid || r.row?.[3] === "dead") st[fid] = { s: "dead", from: E.id, why: r.unpaid ? "Medical Escort not paid" : "Complications at the Doc" };
+          else st[fid] = { s: "recovery", from: E.id, battleOnly: true, why: r.row[2] === "Stabilised" ? `Stabilised at the Doc${r.inj ? " (" + r.inj[2] + ")" : ""}` : "Full Recovery at the Doc" };
+        } else if (x.s === "ransom") {
+          if (x.paid === "paid") st[fid] = { s: "recovery", from: E.id, battleOnly: true, why: "Ransom paid" };
+          else if (x.paid === "unpaid") st[fid] = { s: "dead", from: E.id, why: "Ransom not paid" };
+        }
+      }
+    } else if (E.avail) {
+      for (const i of E.injuries || []) {
+        const fid = i.victim; if (!fid || !FIDX[fid]) continue;
+        const name = injuryResult(i, E)?.[2];
+        if (RECOVERY_RESULTS.has(name)) st[fid] = { s: "recovery", from: E.id, why: name };
+        else if (name === "Critical Injury") st[fid] = { s: "critical", from: E.id, why: name };
+        else if (name === "Memorable Death") st[fid] = { s: "dead", from: E.id, why: name };
+        else if (name === "Captured") {
+          const e = escapeOf(i)?.[2];
+          st[fid] = !e ? { s: "captured", from: E.id, why: "Captured – Escape roll not made" } : e === "Executed" ? { s: "dead", from: E.id, why: "Executed trying to escape" }
+            : e === "Daring Escape" ? { s: "recovery", from: E.id, why: "Daring Escape" } : { s: "ransom", from: E.id, paid: i.ransomPaid || "", why: "Captured – ransomed" };
+        }
+      }
+    }
+  }
+  return (AVAIL = { before, now: st });
+}
+/* Is this fighter kept out of this battle or post-cycle? Returns their state, or null. */
+function unavailIn(b, fid) {
+  const raw = pcRaw(b), x = availability().before[raw?.id]?.[fid]; if (!x) return null;
+  if (x.s !== "recovery") return x;
+  return isPC(raw) || (raw.gangs || []).includes(FIDX[fid]?.gang) ? x : null;
+}
+function availText(x, short) {
+  const from = S.battles[x.from], where = from ? (isPC(from) ? "the post-cycle of " + fmtDate(from.date) : `"${battleTitle(from)}" (${fmtDate(from.date)})`) : "";
+  if (x.s === "recovery") return short ? "In Recovery" : `In Recovery (${x.why}${where ? ", " + where : ""}): misses ${x.battleOnly ? "their gang's next battle" : "their gang's next battle or post-cycle"}`;
+  if (x.s === "critical") return short ? "Critically Injured" : `Critically Injured${where ? " in " + where : ""}: needs a Medical Escort in the next post-cycle, or dies`;
+  if (x.s === "captured") return short ? "Captured" : `Captured${where ? " in " + where : ""}: roll on the Escape table`;
+  if (x.s === "ransom") return short ? "Captured (ransom)" : `Captured and ransomed${where ? " in " + where : ""}: the ransom is settled in the next post-cycle`;
+  return short ? "Dead" : `Dead (${x.why}${where ? ", " + where : ""})`;
+}
+const availKind = x => x.s === "dead" ? "dead" : x.s === "critical" ? "ooa" : x.s === "recovery" ? "si" : "info";
+const pcBlocked = (f, b) => f && (f.status === "convalescing" || f.status === "captured" || (b && !!unavailIn(b, f.id)));
 /* Lasting injuries (or damage) a fighter carries now: from logged battles and post-cycles, plus the Munda roster, minus what bionics or the chop shop removed. */
 function lastingList(f, k, withCritical) {
   const keep = x => (PERM_NAMES.has(x.name) || (withCritical && x.name === "Critical Damage")) && x.name !== "Captured";
@@ -3537,7 +3630,7 @@ function pcTargets(b) { const m = {}; for (const a of b.actions || []) if ((a.ki
 /* Fighters free to take this action: right role, able to act, not already busy or at the Doc. */
 function pcFree(b, a, busy) {
   const roles = PCA[a.kind]?.[3], targeted = pcTargets(b);
-  return (pcGang(b)?.fighters || []).filter(f => canAct(f) && !busy[f.id] && !targeted[f.id] && (a.kind === "claim" ? isClaimJumper(f) : (!roles || roles.includes(f.role))));
+  return (pcGang(b)?.fighters || []).filter(f => canAct(f) && !unavailIn(b, f.id) && !busy[f.id] && !targeted[f.id] && (a.kind === "claim" ? isClaimJumper(f) : (!roles || roles.includes(f.role))));
 }
 function pcActorOptions(b, a, busy, cur = a.fighter) {
   const g = pcGang(b); const def = PCA[a.kind], roles = def?.[3];
@@ -3555,15 +3648,19 @@ function pcCanAddCrew(b, a, busy) {
   return pcFree(b, a, busy).length > 0;
 }
 function pcTargetOptions(b, a, label) {
-  const targeted = pcTargets(b);
-  const fs = (pcGang(b)?.fighters || []).filter(f => f.id === a.target || (canAct(f) && f.id !== a.fighter && !targeted[f.id] && !["vehicle", "hazard"].includes(f.role)));
+  const targeted = pcTargets(b), tracked = !!pcRaw(b)?.avail;
+  /* A Medical Escort can only take a Critically Injured fighter (and a Critically Injured fighter can only be its target). */
+  const crit = f => unavailIn(b, f.id)?.s === "critical";
+  const fs = (pcGang(b)?.fighters || []).filter(f => f.id === a.target || (canAct(f) && f.id !== a.fighter && !targeted[f.id] && !["vehicle", "hazard"].includes(f.role)
+    && (a.kind === "medical" ? crit(f) || (!tracked && !unavailIn(b, f.id)) : !unavailIn(b, f.id))));
+  if (a.kind === "medical" && !fs.length) return `<option value="">No Critically Injured fighters</option>`;
   return `<option value="">${esc(label)}</option>` + fs.map(f => `<option value="${esc(f.id)}"${f.id === a.target ? " selected" : ""}>${esc(nameAt(f) + (f.status === "convalescing" ? " (in recovery)" : ""))}</option>`).join("");
 }
 function pcWarnings(b, a, busy, targets, workIdx) {
   const w = [], def = PCA[a.kind];
   for (const fid of pcWho(a)) { const f = fighter(fid); if (!f) continue;
     if (busy[f.id] > 1) w.push(`${nameAt(f)} has more than one action. Each model performs one Post-cycle Action.`);
-    if (pcBlocked(f)) w.push(`${nameAt(f)} is ${f.status === "captured" ? "captured" : "In Recovery"} and can't perform Post-cycle Actions.`);
+    if (pcBlocked(f, b)) { const x = unavailIn(b, f.id); w.push(`${nameAt(f)} is ${x ? availText(x, true) : f.status === "captured" ? "captured" : "In Recovery"} and can't perform Post-cycle Actions.`); }
     if (targets[f.id]) w.push(`${nameAt(f)} is being taken to the Doc this post-cycle, so can't perform an action.`);
     if (def?.[3] && !def[3].includes(f.role)) w.push(`${def[1]} is for ${def[2]} only.`);
     if (a.kind === "claim" && !isClaimJumper(f)) w.push(`Only a Claim Jumper can Claim Jump.`);
@@ -3779,11 +3876,16 @@ function renderPCActions(b) {
     </div>`;
   }).join("");
   const g = pcGang(b);
-  const able = (g.fighters || []).filter(f => canAct(f) && !pcBlocked(f) && !["vehicle", "hazard"].includes(f.role));
+  const able = (g.fighters || []).filter(f => canAct(f) && !pcBlocked(f, b) && !["vehicle", "hazard"].includes(f.role));
   const acted = able.filter(f => busy[f.id]).length;
   /* "Everyone else trains" only when someone left would actually gain the XP (not Hangers-on). */
   const canTrain = able.some(f => !busy[f.id] && !targets[f.id] && canEarnXp(f.id));
+  const out = (g.fighters || []).map(f => [f, unavailIn(b, f.id)]).filter(([f, x]) => x && x.s !== "dead");
+  const untreated = out.filter(([f, x]) => x.s === "critical" && !targets[f.id]);
+  const availNote = out.length ? `<div class="avail-note" role="note"><b>Can't act this post-cycle:</b>${out.map(([f, x]) => `<div><b>${esc(nameAt(f))}</b> – ${esc(availText(x))}</div>`).join("")}
+      ${untreated.length ? `<div class="avail-warn">⚠ ${untreated.map(([f]) => esc(nameAt(f))).join(", ")} ${untreated.length === 1 ? "is" : "are"} Critically Injured: add a Medical Escort for ${untreated.length === 1 ? "them" : "each"} in this post-cycle, or they die.</div>` : ""}</div>` : "";
   return `<div style="display:grid;gap:8px">
+    ${availNote}
     <div class="toolbar" style="gap:6px"><span class="muted" style="font-size:.82rem">Add an action:</span>${pcKinds(b).map(([key, name]) => `<button data-act="pcAdd" data-id="${key}">+ ${name}</button>`).join("")}</div>
     ${cards || `<p class="muted" style="margin:0">No actions yet. Each fighter may perform one Post-cycle Action. Fighters In Recovery, captured or Critically Injured can't.</p>`}
     <div class="toolbar muted" style="font-size:.82rem"><span>${acted} of ${able.length} fighters who can act have an action.</span>
@@ -4143,7 +4245,7 @@ function renderGangs() {
       return `<tr class="${isGone(f) ? "dead" : ""}">
         <td><input type="text" id="f-${f.id}-name" data-bind="f.${g.id}.${f.id}.name" value="${esc(f.name)}" aria-label="Name">${(f.formerNames || []).length ? `<div class="muted" style="font-size:.76rem;margin-top:2px">Formerly ${f.formerNames.map(e => `${esc(e.name)} (until ${esc(fmtDate(e.until))})`).join(", ")}</div>` : ""}${f.type ? `<div class="muted" style="font-size:.76rem;margin-top:2px">${esc(f.type)}</div>` : ""}</td>
         <td><select id="f-${f.id}-role" data-bind="f.${g.id}.${f.id}.role" aria-label="Role">${opts(ROLE_OPTS(), roleVal(f))}</select></td>
-        <td><select id="f-${f.id}-status" data-bind="f.${g.id}.${f.id}.status" aria-label="Status">${opts(STATUSES, f.status)}</select></td>
+        <td><select id="f-${f.id}-status" data-bind="f.${g.id}.${f.id}.status" aria-label="Status">${opts(STATUSES, f.status)}</select>${(() => { const x = availability().now[f.id]; return x && !isGone(f) ? `<div class="avail-tag" title="${esc(availText(x))}">${resultTag(availText(x, true), availKind(x))}</div>` : ""; })()}</td>
         <td class="num">${k.battles}</td>${mundaCells(f, k)}<td class="num">${k.ooa}</td><td class="num">${k.downed}</td>
         <td><div class="inj-list">${lasting.map(x => `<span class="tag ${x.kind}" title="${esc(x.src || fmtDate(x.date))}">${esc(x.name)}</span>`).join("") || `<span class="muted">–</span>`}</div></td>
         <td><textarea class="grow" rows="1" id="f-${f.id}-note" data-bind="f.${g.id}.${f.id}.note" placeholder="Note" aria-label="Note">${esc(f.note)}</textarea></td>
@@ -4556,11 +4658,11 @@ function act(a, el) {
       document.querySelector(`[data-act="listFilter"][data-id="${id}"]`)?.focus(); return; }
     case "newPick": S.newPick = !S.newPick; render(); if (S.newPick) document.querySelector('.new-pick button[data-act="newBattle"]')?.focus(); return;
     case "newBattle": {
-      const nb = { kind: "conflict", phase: campaignPhase(), injuryTable: "n26", id: uid("b-"), date: localDay(), scenario: "", gangs: [], attacker: [], defender: [], priority: "", winner: "", crews: {}, treachRoll: "", treachResult: "", leaderBonus: true, participationXp: true, pre: "", events: [], injuries: [], rewards: [], post: "", participants: [] };
+      const nb = { kind: "conflict", phase: campaignPhase(), avail: true, injuryTable: "n26", id: uid("b-"), date: localDay(), scenario: "", gangs: [], attacker: [], defender: [], priority: "", winner: "", crews: {}, treachRoll: "", treachResult: "", leaderBonus: true, participationXp: true, pre: "", events: [], injuries: [], rewards: [], post: "", participants: [] };
       S.battles[nb.id] = nb; S.sel = nb.id; S.composer = null; S.newPick = false; S.copyText = ""; S.tab = "battles"; touch(nb); render(); $("#b-scenario")?.focus(); return;
     }
     case "newReport": {
-      const nb = { report: true, kind: "conflict", phase: campaignPhase(), id: uid("b-"), date: localDay(), scenario: "", gangs: [], attacker: [], defender: [], winner: "", events: [], injuries: [], rewards: [], participants: [], post: "" };
+      const nb = { report: true, kind: "conflict", phase: campaignPhase(), avail: true, id: uid("b-"), date: localDay(), scenario: "", gangs: [], attacker: [], defender: [], winner: "", events: [], injuries: [], rewards: [], participants: [], post: "" };
       S.battles[nb.id] = nb; S.sel = nb.id; S.composer = null; S.newPick = false; S.copyText = ""; S.confirmDel = null; S.tab = "battles"; touch(nb); render(); $("#b-date")?.focus(); return;
     }
     case "reportToBattle": {
@@ -4569,7 +4671,7 @@ function act(a, el) {
       touch(b); render(); toast("Now a full battle: add the details below"); return;
     }
     case "newPostCycle": {
-      const pc = { type: "postcycle", id: uid("pc-"), date: localDay(), cycle: "", sheets: {} };
+      const pc = { type: "postcycle", avail: true, id: uid("pc-"), date: localDay(), cycle: "", sheets: {} };
       /* Every gang's Collect income starts with the Territories it holds on the map (Income chosen); Rep is saved with it. */
       for (const gid of pcGangIds()) { const v = pcView(pc, gid); addHeldTerritories(v); freezeRep(v); }
       S.battles[pc.id] = pc; S.sel = pc.id; S.newPick = false; S.copyText = ""; S.confirmDel = null; S.tab = "battles"; touch(pc); render(); $("#b-cycle")?.focus(); return;
@@ -4614,7 +4716,7 @@ function act(a, el) {
       let a = b.actions.find(x => x.kind === "train");
       if (!a) { a = { id: uid("pca"), kind: "train", fighter: "", target: "", note: "", crew: [] }; b.actions.push(a); }
       a.crew ||= [];
-      for (const f of pcGang(b)?.fighters || []) if (canAct(f) && !pcBlocked(f) && !busy[f.id] && !targets[f.id] && canEarnXp(f.id)) {
+      for (const f of pcGang(b)?.fighters || []) if (canAct(f) && !pcBlocked(f, b) && !busy[f.id] && !targets[f.id] && canEarnXp(f.id)) {
         if (!a.fighter) a.fighter = f.id; else { const e = a.crew.find(c => !c.fighter); if (e) e.fighter = f.id; else a.crew.push({ id: uid("pcm"), fighter: f.id }); }
         n++;
       }
@@ -5048,7 +5150,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-01";
+const APP_BUILD = "2026-11-03";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
