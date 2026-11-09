@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261103114304";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261109221650";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -502,6 +502,11 @@ td.total { font-weight: 600; color: var(--ok); }
 /* rules */
 .rules { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; margin-top: 18px; align-items: start; }
 .rules .rcol { display: grid; gap: 18px; min-width: 0; align-content: start; }
+.rules .house { grid-column: 1 / -1; }
+.rules .house h3 { font-size: 1rem; margin: 6px 0 0; }
+.rules .house p { margin: 0; }
+.rules .house p.muted { font-size: .82rem; }
+.rules .house ol { margin: 0; padding-left: 1.6em; display: grid; gap: 3px; }
 .range { font-family: var(--font-mono); white-space: nowrap; }
 
 .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--r); display: grid; gap: 10px; justify-items: center; }
@@ -4291,19 +4296,59 @@ function renderRules() {
   const xpRows = list => list.map(([a, v]) => `<tr><td>${a}</td><td class="num">${v}</td></tr>`).join("");
   const xp = xpRows([["Took part in the battle", "1"], ["Action directly causes an enemy model to become Seriously Injured/Damaged *", "1"], ["Action directly causes an enemy model to go Out of Action *", "2"], ["…and it was a Leader, Champion, Brute or Vehicle", "+1"], ["Assistance to a Fighter who then recovers (Vehicles can't provide or benefit)", "1"], ["Control an objective in the End phase (once per Fighter per battle; not Vehicles or Pets)", "1"]]);
   const xpOld = xpRows([["Seriously Injure an enemy fighter", "1"], ["Take an enemy fighter Out of Action", "2"], ["…and it was a Leader or Champion", "+1"], ["Wreck an enemy vehicle", "2"], ["Webbed an enemy fighter (your logs)", "1"], ["Successful Rally test", "1"], ["Assist a friendly fighter to recover", "1"], ["Took part in the battle (scenario reward)", "1"], ["Lesson Learnt lasting injury", "D3"], ["Caused a Memorable Death", "+1"]]);
+  const now = ph => campaignPhase() === ph ? ' <span class="tag si">Now</span>' : "";
+  const house = `<section class="block house"><div class="block-head"><h2 id="h-house">House rules</h2><span class="rule-src">Source: House Rules</span></div>
+      <h3>1. Cycles</h3>
+      <ol>
+        <li>A cycle is two campaign battles for each gang.</li>
+        <li>A cycle ends when every player has been the attacker in at least one campaign battle.</li>
+        <li>Any number of special battles may be played during a cycle.</li>
+      </ol>
+      <h3>2. Campaign phases</h3>
+      <div class="table-wrap"><table><tbody>
+        <tr><td><strong>Expansion</strong>${now("expansion")}</td><td>You may only attack unclaimed territories. You may attack a territory held by another gang only if there is no unclaimed territory you could attack.</td></tr>
+        <tr><td><strong>Dominion</strong>${now("dominion")}</td><td>You may also attack territories held by other gangs.</td></tr>
+      </tbody></table></div>
+      <ol start="4">
+        <li>The campaign is currently in the <strong>${campaignPhase() === "dominion" ? "Dominion" : "Expansion"}</strong> phase.</li>
+        <li>The Arbitrator decides when the campaign moves from the Expansion phase to the Dominion phase.</li>
+        <li>In either phase, a gang's Settlement can never be attacked.</li>
+      </ol>
+      <p class="muted">The phase is set with the Phase menu above the campaign map.</p>
+      <h3>3. Post-cycle actions</h3>
+      <ol start="7">
+        <li>Post-cycle actions are taken after the second campaign battle of a cycle.</li>
+        <li>A fighter who is in Recovery after the second campaign battle (Lasting Injury results 31–62) can't take a post-cycle action.</li>
+      </ol>
+      <h3>4. Critical Injury</h3>
+      <p>When a fighter suffers a Critical Injury (Lasting Injury 63–65), what happens depends on the battle it happened in:</p>
+      <div class="table-wrap"><table><thead><tr><th>Injured in</th><th>Medical Escort</th><th>Afterwards</th></tr></thead><tbody>
+        <tr><td><strong>The 1st campaign battle of a cycle</strong></td><td>In the post-cycle, as a post-cycle action.</td><td>Misses the 2nd campaign battle of the cycle. Once saved by the Medical Escort, the fighter may take a post-cycle action of their own.</td></tr>
+        <tr><td><strong>The 2nd campaign battle of a cycle</strong></td><td>In the post-cycle, as a post-cycle action.</td><td>Can't take a post-cycle action, and misses the 1st battle of the next cycle.</td></tr>
+        <tr><td><strong>A special battle</strong></td><td>Straight after the battle, without using a post-cycle action.</td><td>Always misses the next battle their gang takes part in. A cycle always ends with a campaign battle, so this never costs the fighter their post-cycle action.</td></tr>
+      </tbody></table></div>
+      <ol start="9">
+        <li>The Medical Escort itself follows the normal rules: 30 credits, then a D6. A fighter who isn't saved dies.</li>
+      </ol>
+      <h3>5. Buying equipment</h3>
+      <ol start="10">
+        <li>A gang may buy equipment from its Equipment List at any time.</li>
+      </ol>
+      <h3>6. Recruiting</h3>
+      <ol start="11">
+        <li>New Gangers, Hangers-on and Brutes can only be recruited with a Visit the Trading Post post-cycle action.</li>
+        <li>This includes fighters gained through Territory Boons.</li>
+      </ol>
+    </section>`;
   return `<div class="rules">
+    ${house}
     <div class="rcol">
     <section class="block"><div class="block-head"><h2>Attacking and taking territory</h2><span class="rule-src">Source: House Rules</span></div>
       <div class="table-wrap"><table><thead><tr><th>You hold a territory in</th><th>You can attack</th><th>But not</th></tr></thead><tbody>
         <tr><td><strong>The Ash Wastes</strong></td><td>Any territory in the Ash Wastes, including the hexes inside the Hive that have a Wasteland access point.</td><td>Any other territory inside the Hive, until you have taken a Wasteland access point.</td></tr>
         <tr><td><strong>The Hive</strong></td><td>Any territory next to one of yours.</td><td>Out into the Ash Wastes, until you hold a Wasteland access point.</td></tr>
       </tbody></table></div>
-      <h3 style="font-size:1rem;margin:4px 0 0">Campaign phases</h3>
-      <div class="table-wrap"><table><tbody>
-        <tr><td><strong>Expansion</strong>${campaignPhase() === "expansion" ? ' <span class="tag si">Now</span>' : ""}</td><td>You can only attack unclaimed territories. Only if there is no unclaimed territory you could attack may you attack one held by another gang.</td></tr>
-        <tr><td><strong>Dominion</strong>${campaignPhase() === "dominion" ? ' <span class="tag si">Now</span>' : ""}</td><td>You can also attack territories held by other gangs.</td></tr>
-      </tbody></table></div>
-      <p class="muted" style="margin:0;font-size:.82rem">The phase is set with the Phase menu above the campaign map. Either way, a gang's Settlement can never be attacked.</p>
+      <p class="muted" style="margin:0;font-size:.82rem">What you may attack also depends on the campaign phase: see <a href="#h-house">House rules</a>.</p>
       <h3 style="font-size:1rem;margin:4px 0 0">Wasteland access points</h3>
       <p style="margin:0;display:flex;flex-wrap:wrap;gap:6px">${terrList().filter(t => zoneOf(t) === "access").map(t => terrTag(t.id)).join("")}</p>
       <p class="muted" style="margin:0;font-size:.82rem">These hexes sit inside the Hive on the edge of the Ash Wastes and count as both: battles there can be fought in either. Tunnels is the exception: it is a Hive area, so battles there are fought in the Hive. Holding any access point gives a gang access to the Ash Wastes, and a gang with access to the Ash Wastes can attack every access point (but not the Hive territories around them).</p>
@@ -5150,7 +5195,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-03";
+const APP_BUILD = "2026-11-09";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
