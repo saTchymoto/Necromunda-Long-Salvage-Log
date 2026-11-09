@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261109221650";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261109223054";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -818,6 +818,12 @@ const escapeOf = i => { const n = parseInt(i.escape, 10); return n >= 1 && n <= 
 const ransomCredits = i => { const n = parseInt(i.ransomD6, 10); return n >= 1 && n <= 6 ? n * 10 : null; };
 const RANSOM_PAID = [["", "Not decided yet"], ["paid", "Paid → Recovery"], ["unpaid", "Not paid → dies, gear to Stash"]];
 /* One-line summary of a capture, for reports and the summary table. */
+/* Special battles: the Medical Escort made straight after the battle (house rules), for reports and the summary table. */
+function medText(i, b) {
+  if (isConflict(b) || !b.avail) return "";
+  const r = medResult(injMed(i)); if (!r) return "Medical Escort not rolled yet";
+  return !medSaved(r) ? `Medical Escort: ${r.unpaid ? "not paid" : "Complications"}, dies` : `Medical Escort: ${r.row[2]}${r.inj ? " (" + r.inj[2] + ")" : ""}, misses the gang's next battle`;
+}
 function captureText(i) {
   const e = escapeOf(i); if (!e) return "";
   let t = `Escape D6 ${i.escape}: ${e[2]}`;
@@ -2254,15 +2260,30 @@ function renderInjuries(b) {
     let capHtml = "";
     if (b.avail && inj.victim && (name === "Critical Injury" || RECOVERY_RESULTS.has(name))) {
       const next = availTimeline().find(x => isPC(x) && (x.date > b.date || (x.date === b.date)));
-      if (name === "Critical Injury") {
+      if (name === "Critical Injury" && !isConflict(b)) {
+        /* Special battle (house rules): the Medical Escort happens straight after the battle, on this row. */
+        const m = injMed(inj), r = medResult(m), ex = wholeNum(inj.medExtra), dIn = (k, lbl) => `<input type="text" inputmode="numeric" maxlength="1" id="in-${inj.id}-${k}" aria-label="${lbl}" data-bind="in.${inj.id}.${k}" value="${esc(inj[k] || "")}" placeholder="D6" style="width:44px"><button class="ghost" data-act="rollMed" data-id="${inj.id}" data-k="${k}">Roll</button>`;
+        capHtml = `<div class="capture">
+          <div class="extra"><span>Medical Escort</span><label class="check" style="flex:none;width:auto"><input type="checkbox" id="in-${inj.id}-medPay" data-bind="in.${inj.id}.medPay" style="width:auto;flex:none;margin:0"${inj.medPay === false ? "" : " checked"}>Pay the Doc 30 credits</label></div>
+          ${inj.medPay === false ? "" : `<div class="extra"><span>"I'll Use the Good Stuff"</span><input type="text" inputmode="numeric" id="in-${inj.id}-medExtra" aria-label="Extra 50 credits payments" data-bind="in.${inj.id}.medExtra" value="${esc(inj.medExtra || "")}" placeholder="0" style="width:60px"><span class="muted">× 50 credits${ex ? ` (+${ex} to the roll)` : ""}</span></div>
+          <div class="extra"><span>D6</span><div class="dice">${dIn("medD6", "Medical Escort roll (D6)")}${r ? resultTag(r.row[2], r.row[3]) + (ex ? `<span class="mono muted">${r.n} +${ex} = ${r.tot}</span>` : "") : ""}</div></div>`}
+          ${r?.row?.[2] === "Stabilised" ? `<div class="extra"><span>Second dice (D66 5_)</span><div class="dice">${dIn("medD6b", "Stabilised: second dice of the D66 (first dice 5)")}${r.inj ? resultTag("5" + inj.medD6b + " " + r.inj[2], r.inj[3]) : ""}</div></div>${r.inj ? `<div class="effect">${esc(r.inj[4])}</div>` : ""}` : ""}
+          <div class="effect">${!r ? `${esc(fname(inj.victim))} is out of everything until the Medical Escort is rolled.`
+            : !medSaved(r) ? `${resultTag("Dies", "dead")} ${esc(r.row[4])}`
+            : `${resultTag("Recovery", "si")} ${esc(fname(inj.victim))} misses the next battle their gang takes part in, then is available again.`}</div>
+          <div class="effect muted">House rule: after a special battle the gang takes a Critically Injured fighter to the Doc straight away (30 credits, then a D6), without using a post-cycle action.</div></div>`;
+      } else if (name === "Critical Injury") {
         const a = next && pcActionsAll(next).find(a => a.kind === "medical" && a.target === inj.victim), r = a && medResult(a);
+        const missed = next && availability().before[next.id]?.[inj.victim]?.missed;
         const outcome = !next ? `<span class="muted">Needs a Medical Escort in the next post-cycle, or ${esc(fname(inj.victim))} dies.</span>`
           : !a ? `${resultTag("No Medical Escort yet", "ooa")}<button class="linkish" data-act="openBattle" data-id="${esc(next.id)}">Open the post-cycle of ${esc(fmtDate(next.date))}</button>`
           : !r ? `${resultTag("Medical Escort: not rolled yet", "si")}<button class="linkish" data-act="openBattle" data-id="${esc(next.id)}">Open the post-cycle</button>`
-          : r.unpaid || r.row[3] === "dead" ? resultTag(r.unpaid ? "Not paid: dies" : "Complications: dies", "dead")
-          : resultTag(r.row[2] === "Stabilised" ? `Stabilised${r.inj ? ": " + r.inj[2] : ""} → Recovery` : "Full Recovery → Recovery", "si");
+          : !medSaved(r) ? resultTag(r.unpaid ? "Not paid: dies" : "Complications: dies", "dead")
+          : resultTag(`${r.row[2] === "Stabilised" ? `Stabilised${r.inj ? ": " + r.inj[2] : ""}` : "Full Recovery"} → ${missed ? "may act in the post-cycle" : "no post-cycle action, misses the next battle"}`, "si");
         capHtml = `<div class="capture"><div class="extra"><span>Medical Escort</span><div class="dice">${outcome}</div></div>
-          <div class="effect">Out of everything until a Medical Escort in the next post-cycle (30 credits, then a D6). Saved fighters go into Recovery and miss their gang's first battle after it.</div></div>`;
+          <div class="effect">House rules: out of every battle until the post-cycle, where a Medical Escort (a post-cycle action: 30 credits, then a D6) saves them or they die.
+            Injured in the gang's 1st campaign battle of the cycle: misses the 2nd, and once saved may take a post-cycle action.
+            Injured in the 2nd: no post-cycle action, and misses the gang's 1st battle of the next cycle.</div></div>`;
       } else capHtml = `<div class="capture"><div class="effect">${resultTag("Recovery", "si")} ${esc(fname(inj.victim))} misses their gang's next battle or post-cycle, whichever comes first, then is available again.</div></div>`;
     }
     if (name === "Captured") {
@@ -3558,12 +3579,20 @@ const canAct = f => f && !isGone(f) && f.status !== "retired";
    Worked out from the logged history, in date order (battles before a post-cycle on the same date):
    - Recovery results (Grievous Wound, 51–56) and a Daring Escape: the fighter misses their gang's next battle OR next post-cycle,
      whichever comes first, then is free again.
-   - Critical Injury: out of everything until a post-cycle. There a Medical Escort decides: Full Recovery or Stabilised = Recovery,
-     missing the gang's first battle after that post-cycle; Complications, not paying, or no Medical Escort at all = dead.
+   - Critical Injury (house rules):
+     · In a campaign battle: out of every battle until the post-cycle, where a Medical Escort (a post-cycle action) decides.
+       Complications, not paying, or no Medical Escort at all = dead. Saved after the gang has played another campaign battle
+       (injured in the 1st of the cycle, so they missed the 2nd) = free again, and may take a post-cycle action of their own.
+       Saved otherwise (injured in the 2nd) = no post-cycle action, and Recovery for the gang's first battle after the post-cycle.
+     · In a special battle: the Medical Escort is rolled on the injury row straight after the battle (inj.medPay/medExtra/medD6/medD6b).
+       Saved = Recovery for the gang's next battle (never a post-cycle action); not saved = dead; not rolled yet = out of everything.
    - Captured: out until the Escape roll. Executed = dead; Daring Escape = Recovery; Ransomed = captured until the next post-cycle,
      where a paid ransom means Recovery (first battle after it) and an unpaid one means dead.
    - Memorable Death: dead. */
 const RECOVERY_RESULTS = new Set(["Grievous Wound", "Eye Injury", "Hand Injury", "Hobbled", "Spinal Injury", "Enfeebled", "Head Injury"]);
+const injMed = i => ({ pay: i.medPay !== false, extra: i.medExtra, d6: i.medD6, d6b: i.medD6b });
+const medSaved = r => r && !r.unpaid && r.row?.[3] !== "dead";
+const medWhy = (r, where) => `${r.row[2] === "Stabilised" ? "Stabilised" : "Full Recovery"} at the Doc ${where}${r.inj ? " (" + r.inj[2] + ")" : ""}`;
 const pcActionsAll = pc => Object.values(pc.sheets || {}).flatMap(sh => sh?.actions || []).concat(pc.actions || []);
 function availTimeline() { return Object.values(S.battles).filter(b => b && b.date).sort((a, c) => a.date.localeCompare(c.date) || (isPC(a) ? 1 : 0) - (isPC(c) ? 1 : 0) || String(a.id).localeCompare(String(c.id))); }
 let AVAIL = null;
@@ -3573,17 +3602,20 @@ function availability() {
   for (const E of availTimeline()) {
     before[E.id] = JSON.parse(JSON.stringify(st));
     const pc = isPC(E), inIt = new Set(pc ? Object.keys(S.gangs) : (E.gangs || []));
+    /* A campaign battle the gang plays while a fighter is Critically Injured is the battle that fighter misses. */
+    if (isConflict(E)) for (const x of Object.values(st)) if (x.s === "critical" && !x.special && inIt.has(x.gang)) x.missed = true;
     /* Recovery is served in this entry (if the fighter's gang is in it), then cleared. */
     for (const [fid, x] of Object.entries(st)) if (x.s === "recovery" && inIt.has(FIDX[fid]?.gang) && !(x.battleOnly && pc)) delete st[fid];
     if (pc) {
       const acts = pcActionsAll(E);
       for (const [fid, x] of Object.entries(st)) {
-        if (x.s === "critical") {
+        if (x.s === "critical" && !x.special) {
           const a = acts.find(a => a.kind === "medical" && a.target === fid), r = a && medResult(a);
           if (!a) st[fid] = { s: "dead", from: E.id, why: "Critical Injury not treated in the post-cycle" };
           else if (!r) st[fid] = { ...x, pending: E.id };
-          else if (r.unpaid || r.row?.[3] === "dead") st[fid] = { s: "dead", from: E.id, why: r.unpaid ? "Medical Escort not paid" : "Complications at the Doc" };
-          else st[fid] = { s: "recovery", from: E.id, battleOnly: true, why: r.row[2] === "Stabilised" ? `Stabilised at the Doc${r.inj ? " (" + r.inj[2] + ")" : ""}` : "Full Recovery at the Doc" };
+          else if (!medSaved(r)) st[fid] = { s: "dead", from: E.id, why: r.unpaid ? "Medical Escort not paid" : "Complications at the Doc" };
+          else if (x.missed) delete st[fid];
+          else st[fid] = { s: "recovery", from: E.id, battleOnly: true, why: medWhy(r, "in the post-cycle") };
         } else if (x.s === "ransom") {
           if (x.paid === "paid") st[fid] = { s: "recovery", from: E.id, battleOnly: true, why: "Ransom paid" };
           else if (x.paid === "unpaid") st[fid] = { s: "dead", from: E.id, why: "Ransom not paid" };
@@ -3594,7 +3626,13 @@ function availability() {
         const fid = i.victim; if (!fid || !FIDX[fid]) continue;
         const name = injuryResult(i, E)?.[2];
         if (RECOVERY_RESULTS.has(name)) st[fid] = { s: "recovery", from: E.id, why: name };
-        else if (name === "Critical Injury") st[fid] = { s: "critical", from: E.id, why: name };
+        else if (name === "Critical Injury") {
+          const r = !isConflict(E) && medResult(injMed(i)), gang = FIDX[fid]?.gang;
+          st[fid] = isConflict(E) ? { s: "critical", from: E.id, gang, why: name }
+            : !r ? { s: "critical", special: true, from: E.id, gang, why: name }
+            : !medSaved(r) ? { s: "dead", from: E.id, why: r.unpaid ? "Medical Escort not paid" : "Complications at the Doc" }
+            : { s: "recovery", from: E.id, battleOnly: true, why: medWhy(r, "after the battle") };
+        }
         else if (name === "Memorable Death") st[fid] = { s: "dead", from: E.id, why: name };
         else if (name === "Captured") {
           const e = escapeOf(i)?.[2];
@@ -3609,13 +3647,24 @@ function availability() {
 /* Is this fighter kept out of this battle or post-cycle? Returns their state, or null. */
 function unavailIn(b, fid) {
   const raw = pcRaw(b), x = availability().before[raw?.id]?.[fid]; if (!x) return null;
+  if (isPC(raw) && x.s === "critical" && pcSavedToAct(raw, fid)) return null;
   if (x.s !== "recovery") return x;
-  return isPC(raw) || (raw.gangs || []).includes(FIDX[fid]?.gang) ? x : null;
+  return isPC(raw) ? (x.battleOnly ? null : x) : (raw.gangs || []).includes(FIDX[fid]?.gang) ? x : null;
 }
+/* House rules: a fighter Critically Injured in the gang's 1st campaign battle of the cycle missed the 2nd, so once a Medical Escort
+   saves them in this post-cycle they may take a post-cycle action of their own. */
+function pcSavedToAct(b, fid) {
+  const raw = pcRaw(b), x = availability().before[raw?.id]?.[fid];
+  if (!x || x.s !== "critical" || x.special || !x.missed) return false;
+  const a = pcActionsAll(raw).find(a => a.kind === "medical" && a.target === fid);
+  return !!a && medSaved(medResult(a));
+}
+const pcCritIn = (b, fid) => { const x = availability().before[pcRaw(b)?.id]?.[fid]; return !!x && x.s === "critical" && !x.special; };
 function availText(x, short) {
   const from = S.battles[x.from], where = from ? (isPC(from) ? "the post-cycle of " + fmtDate(from.date) : `"${battleTitle(from)}" (${fmtDate(from.date)})`) : "";
   if (x.s === "recovery") return short ? "In Recovery" : `In Recovery (${x.why}${where ? ", " + where : ""}): misses ${x.battleOnly ? "their gang's next battle" : "their gang's next battle or post-cycle"}`;
-  if (x.s === "critical") return short ? "Critically Injured" : `Critically Injured${where ? " in " + where : ""}: needs a Medical Escort in the next post-cycle, or dies`;
+  if (x.s === "critical") return short ? "Critically Injured" : x.special ? `Critically Injured${where ? " in " + where : ""}: roll the Medical Escort on that battle's injury row`
+    : `Critically Injured${where ? " in " + where : ""}: misses every battle until a Medical Escort in the next post-cycle, or dies`;
   if (x.s === "captured") return short ? "Captured" : `Captured${where ? " in " + where : ""}: roll on the Escape table`;
   if (x.s === "ransom") return short ? "Captured (ransom)" : `Captured and ransomed${where ? " in " + where : ""}: the ransom is settled in the next post-cycle`;
   return short ? "Dead" : `Dead (${x.why}${where ? ", " + where : ""})`;
@@ -3632,10 +3681,12 @@ function lastingList(f, k, withCritical) {
 }
 function pcBusy(b) { const m = {}; for (const a of b.actions || []) for (const fid of pcWho(a)) m[fid] = (m[fid] || 0) + 1; return m; }
 function pcTargets(b) { const m = {}; for (const a of b.actions || []) if ((a.kind === "medical" || a.kind === "bionics") && a.target) (m[a.target] ||= []).push(a.kind); return m; }
+/* At the Doc this post-cycle, so no action of their own: unless a Medical Escort saved them after they had already missed a campaign battle. */
+const pcAtDoc = (b, targeted, fid) => !!targeted[fid] && !(targeted[fid].every(k => k === "medical") && pcSavedToAct(b, fid));
 /* Fighters free to take this action: right role, able to act, not already busy or at the Doc. */
 function pcFree(b, a, busy) {
   const roles = PCA[a.kind]?.[3], targeted = pcTargets(b);
-  return (pcGang(b)?.fighters || []).filter(f => canAct(f) && !unavailIn(b, f.id) && !busy[f.id] && !targeted[f.id] && (a.kind === "claim" ? isClaimJumper(f) : (!roles || roles.includes(f.role))));
+  return (pcGang(b)?.fighters || []).filter(f => canAct(f) && !unavailIn(b, f.id) && !busy[f.id] && !pcAtDoc(b, targeted, f.id) && (a.kind === "claim" ? isClaimJumper(f) : (!roles || roles.includes(f.role))));
 }
 function pcActorOptions(b, a, busy, cur = a.fighter) {
   const g = pcGang(b); const def = PCA[a.kind], roles = def?.[3];
@@ -3655,7 +3706,7 @@ function pcCanAddCrew(b, a, busy) {
 function pcTargetOptions(b, a, label) {
   const targeted = pcTargets(b), tracked = !!pcRaw(b)?.avail;
   /* A Medical Escort can only take a Critically Injured fighter (and a Critically Injured fighter can only be its target). */
-  const crit = f => unavailIn(b, f.id)?.s === "critical";
+  const crit = f => pcCritIn(b, f.id);
   const fs = (pcGang(b)?.fighters || []).filter(f => f.id === a.target || (canAct(f) && f.id !== a.fighter && !targeted[f.id] && !["vehicle", "hazard"].includes(f.role)
     && (a.kind === "medical" ? crit(f) || (!tracked && !unavailIn(b, f.id)) : !unavailIn(b, f.id))));
   if (a.kind === "medical" && !fs.length) return `<option value="">No Critically Injured fighters</option>`;
@@ -3666,7 +3717,9 @@ function pcWarnings(b, a, busy, targets, workIdx) {
   for (const fid of pcWho(a)) { const f = fighter(fid); if (!f) continue;
     if (busy[f.id] > 1) w.push(`${nameAt(f)} has more than one action. Each model performs one Post-cycle Action.`);
     if (pcBlocked(f, b)) { const x = unavailIn(b, f.id); w.push(`${nameAt(f)} is ${x ? availText(x, true) : f.status === "captured" ? "captured" : "In Recovery"} and can't perform Post-cycle Actions.`); }
-    if (targets[f.id]) w.push(`${nameAt(f)} is being taken to the Doc this post-cycle, so can't perform an action.`);
+    if (pcAtDoc(b, targets, f.id)) w.push(pcCritIn(b, f.id) && availability().before[pcRaw(b).id][f.id].missed
+      ? `${nameAt(f)} can act only once the Medical Escort has saved them (Full Recovery or Stabilised).`
+      : `${nameAt(f)} is being taken to the Doc this post-cycle, so can't perform an action.`);
     if (def?.[3] && !def[3].includes(f.role)) w.push(`${def[1]} is for ${def[2]} only.`);
     if (a.kind === "claim" && !isClaimJumper(f)) w.push(`Only a Claim Jumper can Claim Jump.`);
   }
@@ -3886,8 +3939,9 @@ function renderPCActions(b) {
   /* "Everyone else trains" only when someone left would actually gain the XP (not Hangers-on). */
   const canTrain = able.some(f => !busy[f.id] && !targets[f.id] && canEarnXp(f.id));
   const out = (g.fighters || []).map(f => [f, unavailIn(b, f.id)]).filter(([f, x]) => x && x.s !== "dead");
-  const untreated = out.filter(([f, x]) => x.s === "critical" && !targets[f.id]);
-  const availNote = out.length ? `<div class="avail-note" role="note"><b>Can't act this post-cycle:</b>${out.map(([f, x]) => `<div><b>${esc(nameAt(f))}</b> – ${esc(availText(x))}</div>`).join("")}
+  const untreated = out.filter(([f, x]) => x.s === "critical" && !x.special && !targets[f.id]);
+  for (const [f, x] of out) if (x.s === "critical" && x.missed && !x.special) x.note = "missed a campaign battle already, so once saved they may take a post-cycle action";
+  const availNote = out.length ? `<div class="avail-note" role="note"><b>Can't act this post-cycle:</b>${out.map(([f, x]) => `<div><b>${esc(nameAt(f))}</b> – ${esc(availText(x))}${x.note ? ` (${esc(x.note)})` : ""}</div>`).join("")}
       ${untreated.length ? `<div class="avail-warn">⚠ ${untreated.map(([f]) => esc(nameAt(f))).join(", ")} ${untreated.length === 1 ? "is" : "are"} Critically Injured: add a Medical Escort for ${untreated.length === 1 ? "them" : "each"} in this post-cycle, or they die.</div>` : ""}</div>` : "";
   return `<div style="display:grid;gap:8px">
     ${availNote}
@@ -4184,7 +4238,8 @@ function career(skipId) {
     for (const r of Object.values(battleXp(b))) { row(r.id).xp += r.total; if (r.total) row(r.id).xpLog.push([b.date || "", r.total]); }
     /* Out of Action or Wrecked: whoever took the action dealt it (not for a fall: the faller is the one who went down). */
     for (const e of b.events || []) { if (!isDown(e)) continue; const v = injVictim(e); if (e.by && !isFall(e)) row(e.by).ooa++; if (v) row(v).downed++; }
-    for (const i of b.injuries || []) { const r = injuryResult(i, b); if (r && i.victim) row(i.victim).injuries.push({ name: r[2], kind: r[3], date: b.date }); }
+    for (const i of b.injuries || []) { const r = injuryResult(i, b); if (r && i.victim) row(i.victim).injuries.push({ name: r[2], kind: r[3], date: b.date });
+      const m = r?.[2] === "Critical Injury" && !isConflict(b) && medResult(injMed(i)); if (m?.inj && i.victim) row(i.victim).injuries.push({ name: m.inj[2], kind: m.inj[3], date: b.date }); }
   }
   return c;
 }
@@ -4549,7 +4604,9 @@ function setBound(el) {
   if (scope === "in") {
     const i = b.injuries.find(x => x.id === parts[1]); if (!i) return;
     i[parts[2]] = val; touch(b);
-    return el.tagName === "SELECT" || ["roll", "extra", "d3", "escape", "ransomD6"].includes(parts[2]) ? "rerender-soft" : "none";
+    if (parts[2] === "medD6" && medResult(injMed(i))?.row?.[2] !== "Stabilised") i.medD6b = "";
+    if (parts[2] === "medPay") return "rerender";
+    return el.tagName === "SELECT" || ["roll", "extra", "d3", "escape", "ransomD6", "medD6", "medD6b", "medExtra"].includes(parts[2]) ? "rerender-soft" : "none";
   }
   if (scope === "pas") {
     const a = (b.actions || []).find(x => x.id === parts[1]); const st = a?.steps?.find(x => x.id === parts[2]); if (!st) return;
@@ -4900,6 +4957,7 @@ function act(a, el) {
     case "delInjury": b.injuries = b.injuries.filter(x => x.id !== id); touch(b); render(); return;
     case "rollD66": { const i = b.injuries.find(x => x.id === id); i.roll = "" + d6() + d6(); i.result = ""; touch(b); render(); return; }
     case "rollEscape": { const i = b.injuries.find(x => x.id === id); i.escape = "" + d6(); if (escapeOf(i)?.[2] !== "Ransomed") { i.ransomD6 = ""; i.ransomPaid = ""; } touch(b); render(); return; }
+    case "rollMed": { const i = b.injuries.find(x => x.id === id), k = el.dataset.k === "medD6b" ? "medD6b" : "medD6"; i[k] = "" + d6(); if (k === "medD6" && medResult(injMed(i))?.row?.[2] !== "Stabilised") i.medD6b = ""; touch(b); render(); return; }
     case "rollRansom": { const i = b.injuries.find(x => x.id === id); i.ransomD6 = "" + d6(); touch(b); render(); return; }
     case "rollD3": { const i = b.injuries.find(x => x.id === id); i.d3 = "" + (1 + Math.floor(Math.random() * 3)); touch(b); render(); return; }
     case "togglePart": {
@@ -5070,7 +5128,7 @@ function reportBodyInner(b) {
       if (!list.length && !unev.has(r)) return "";
       return `<tr class="round-row"><td colspan="6"><strong>Round ${r}</strong>${roundTags(b, r).length ? ` <span class="muted">– ${roundTags(b, r).map(t => t[0]).join(", ")}</span>` : ""}</td></tr>` + list.map(e => evTr(e, idx.get(e.id))).join(""); }).join("");
   } else ev = (b.events || []).map(evTr).join("");
-  const inj = (b.injuries || []).map(i => { const r = injuryResult(i, b); const extra = [isLesson(r?.[2]) && i.d3 ? `+${i.d3} XP` : "", r?.[2] === "Multiple Injuries" && i.extra ? "Extra rolls: " + i.extra : "", r?.[2] === "Captured" ? captureText(i) : "", CAUSE_SPECIAL[i.cause] || "", i.outcome, i.note].filter(Boolean).map(esc).join("<br>");
+  const inj = (b.injuries || []).map(i => { const r = injuryResult(i, b); const extra = [isLesson(r?.[2]) && i.d3 ? `+${i.d3} XP` : "", r?.[2] === "Multiple Injuries" && i.extra ? "Extra rolls: " + i.extra : "", r?.[2] === "Captured" ? captureText(i) : "", r?.[2] === "Critical Injury" ? medText(i, b) : "", CAUSE_SPECIAL[i.cause] || "", i.outcome, i.note].filter(Boolean).map(esc).join("<br>");
     return `<tr><td>${who(i.victim)}</td><td class="num">${esc(i.roll || "–")}</td><td>${r ? `<span class="t ${r[3]}">${esc(r[2])}</span>` : "–"}</td><td>${esc(r?.[4] || "")}${extra ? `<div class="muted" style="margin-top:2px">${extra}</div>` : ""}</td></tr>`; }).join("");
   const rw = (b.rewards || []).map(r => `<tr><td>${r.fighter ? who(r.fighter) : dot(r.gang) + esc(gn(r.gang))}</td><td class="num">${(+r.amount > 0 ? "+" : "") + esc(r.amount)} ${r.kind === "xp" ? "XP" : r.kind === "rep" ? "Rep" : "cr"}</td><td>${esc(r.reason)}</td></tr>`).join("");
   const xp = summaryRows(b, battleXp(b));
@@ -5176,7 +5234,7 @@ function reportTextInner(b) {
     L.push(`${i + 1}. ${fname(e.by)} – ${actLabel(e.action)}${isFall(e) && !e.target ? " → " + FLOOR : e.target ? " → " + fname(e.target) : actName(e.action) === "Control Objective" ? " → " + (e.objective || "Objective 1") : ""} – ${resName(e.result)} – ${x.na ? "N/A" : x.xp + " XP" + (x.bonus ? (newXpRules(b) ? " (incl. +1 Leader/Champion/Brute/Vehicle)" : " (incl. +1 Leader/Champion)") : "")}${e.note ? " (" + e.note + ")" : ""}`); });
   if (roundsT) for (let r = lastRound + 1; r <= roundCount(b); r++) if (unevT.has(r)) L.push(`Round ${r}: uneventful`);
   L.push("", `LASTING INJURIES (${INJURY_TABLES[tableOf(b)].label})`);
-  for (const i of b.injuries || []) { const r = injuryResult(i, b); L.push(`${fname(i.victim)}${isVehicleVictim(i.victim) ? (injTableFor(i, b) === "veh" ? " (vehicle damage)" : " (crew injury)") : ""} – ${i.roll || "no roll"} – ${r ? r[2] : "?"}${isLesson(r?.[2]) && i.d3 ? " (+" + i.d3 + " XP)" : ""}${r?.[2] === "Multiple Injuries" && i.extra ? " (" + i.extra + ")" : ""}${r?.[2] === "Captured" && captureText(i) ? " – " + captureText(i) : ""}${CAUSE_SPECIAL[i.cause] ? " – " + CAUSE_SPECIAL[i.cause] : ""}${i.outcome ? " – " + i.outcome : ""}`); }
+  for (const i of b.injuries || []) { const r = injuryResult(i, b); L.push(`${fname(i.victim)}${isVehicleVictim(i.victim) ? (injTableFor(i, b) === "veh" ? " (vehicle damage)" : " (crew injury)") : ""} – ${i.roll || "no roll"} – ${r ? r[2] : "?"}${isLesson(r?.[2]) && i.d3 ? " (+" + i.d3 + " XP)" : ""}${r?.[2] === "Multiple Injuries" && i.extra ? " (" + i.extra + ")" : ""}${r?.[2] === "Captured" && captureText(i) ? " – " + captureText(i) : ""}${r?.[2] === "Critical Injury" && medText(i, b) ? " – " + medText(i, b) : ""}${CAUSE_SPECIAL[i.cause] ? " – " + CAUSE_SPECIAL[i.cause] : ""}${i.outcome ? " – " + i.outcome : ""}`); }
   if (!(b.injuries || []).length) L.push("None");
   L.push("", "POST BATTLE SEQUENCE");
   if (b.winner === "draw") L.push("Result: Draw"); else if (b.winner) L.push(`Winner: ${gn(b.winner)}`);
