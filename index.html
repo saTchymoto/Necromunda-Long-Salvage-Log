@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111114533";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111115835";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1222,7 +1222,8 @@ function actItem(listKey, x) {
   if (listKey === "injuries") return `injury roll for ${fname(x.victim)}${x.roll ? ": " + x.roll : ""}`;
   if (listKey === "rewards") return `${x.kind || "reward"} ${x.amount ?? ""} to ${x.fighter ? fname(x.fighter) : gName(x.gang) || "?"}${x.reason ? " " + x.reason : ""}`.replace(/\s+/g, " ");
   if (listKey === "fighters") return x.name || "a fighter";
-  if (listKey === "actions") return `${x.kind || "action"}${x.fighter ? " for " + fname(x.fighter) : ""}`;
+  if (listKey === "actions") { const who = [x.fighter, ...(x.crew || []).map(c => c.fighter)].filter(Boolean).map(fname);
+    return `${PCA[x.kind]?.[1] || x.kind || "action"}${who.length ? " (" + who.join(", ") + ")" : ""}`; }
   return x.name || x.title || x.kind || "an entry";
 }
 /* [key, sentence] pairs describing what changed between two versions of a record. */
@@ -1247,9 +1248,22 @@ function actDiff(kind, before, after, prefix = "") {
         const am = new Map(A.map(x => [x.id, x])), bm = new Map(B.map(x => [x.id, x]));
         for (const [id, x] of bm) if (!am.has(id)) out.push([key + "+" + id, `added ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
         for (const [id, x] of am) if (!bm.has(id)) out.push([key + "-" + id, `removed ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
+        const fields = (x, y) => Object.keys({ ...x, ...y }).filter(f => !ACT_SKIP.has(f) && stable(x[f]) !== stable(y[f]));
+        const said = (x, f) => f.map(f => { const v = actVal(x[f]); return v ? `${fieldLabel(f)} → ${v}` : fieldLabel(f); }).join(", ");
         for (const [id, x] of bm) { const y = am.get(id); if (!y || stable(x) === stable(y)) continue;
-          const f = Object.keys({ ...x, ...y }).filter(f => !ACT_SKIP.has(f) && stable(x[f]) !== stable(y[f]));
-          out.push([key + "~" + id, `changed ${actItem(k, x)}: ${f.map(f => { const v = actVal(x[f]); return v ? `${fieldLabel(f)} → ${v}` : fieldLabel(f); }).join(", ")}`]); }
+          const f = fields(x, y);
+          if (f.length) out.push([key + "~" + id, `changed ${actItem(k, x)}: ${said(x, f)}`]);
+          /* Fighters added to or taken off a post-cycle action that several fighters share (Train, Develop Tactics…). */
+          if (k === "actions" && stable(x.crew) !== stable(y.crew)) {
+            const name = PCA[x.kind]?.[1] || x.kind || "action", oc = new Map((y.crew || []).map(c => [c.id, c])), nc = new Map((x.crew || []).map(c => [c.id, c]));
+            for (const [cid, c] of nc) { const o = oc.get(cid);
+              if (!o?.fighter) { if (c.fighter) out.push([key + "~" + id + "+" + cid, `added ${fname(c.fighter)} to ${name}`]); continue; }
+              if (o.fighter !== c.fighter) { out.push([key + "~" + id + "~" + cid, c.fighter ? `${name}: ${fname(o.fighter)} replaced by ${fname(c.fighter)}` : `took ${fname(o.fighter)} off ${name}`]); continue; }
+              const cf = fields(c, o); if (cf.length) out.push([key + "~" + id + "~" + cid, `changed ${name} for ${fname(c.fighter)}: ${said(c, cf)}`]);
+            }
+            for (const [cid, o] of oc) if (!nc.has(cid) && o.fighter) out.push([key + "~" + id + "-" + cid, `took ${fname(o.fighter)} off ${name}`]);
+          }
+        }
         continue;
       }
       const add = B.filter(x => !A.some(y => stable(y) === stable(x))), del = A.filter(x => !B.some(y => stable(y) === stable(x)));
