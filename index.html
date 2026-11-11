@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111135857";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111140700";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -508,7 +508,7 @@ td.total { font-weight: 600; color: var(--ok); }
 /* Gangs & fighters: one gang or all, and each gang's Graveyard */
 .gang-views { margin-top: 18px; }
 .gang-views .chip { gap: 6px; }
-.graveyard { display: grid; gap: 6px; padding-top: 10px; border-top: 2px dashed var(--line); }
+.graveyard { gap: 6px; }
 /* Each gang: its roster card, then its Gang Tactics card. */
 .gang-cards { display: grid; gap: 10px; min-width: 0; }
 .gt-title { display: inline-flex; gap: 8px; align-items: center; font-size: 1.15rem; }
@@ -4456,10 +4456,10 @@ function renderGangs(npc) {
       </tr>`;
     };
     const fs = g.fighters || [], trs = fs.filter(f => !inGraveyard(f)).map(row).join(""), dead = fs.filter(inGraveyard);
-    const graveyard = `<div class="graveyard"><h3><span aria-hidden="true">🪦</span> Graveyard${dead.length ? ` <span class="muted gy-n">${dead.length}</span>` : ""}</h3>
+    const graveyard = `<section class="block graveyard"><h2 class="gt-title"><span aria-hidden="true">🪦</span>${esc(g.short || g.name)}: Graveyard${dead.length ? ` <span class="muted gy-n">${dead.length}</span>` : ""}</h2>
       ${dead.length ? `<div class="table-wrap"><table class="ftable">${thead}<tbody>${dead.map(row).join("")}</tbody></table></div>
         <p class="muted gy-note">Dead, sold and retired fighters. Change a fighter's status back to Active to return them to the roster.${dead.some(f => !isGone(f) && f.status !== "retired") ? " Fighters the injury tracking has as dead are here too: set their status to Dead." : ""}</p>`
-        : `<p class="muted gy-note">No fallen fighters yet.</p>`}</div>`;
+        : `<p class="muted gy-note">No fallen fighters yet.</p>`}</section>`;
     return `<div class="gang-cards"><section class="block">
       <div class="gang-head">
         <input type="color" id="g-${g.id}-color" data-bind="g.${g.id}.color" value="${esc(g.color || "#888888")}" aria-label="Gang colour">
@@ -4472,8 +4472,8 @@ function renderGangs(npc) {
       <div class="table-wrap"><table class="ftable">${thead}
       <tbody>${trs}</tbody></table></div>
       <div class="toolbar"><input type="text" id="add-${g.id}" aria-label="New fighter name" placeholder="New fighter name" data-enter="addFighter" data-gang="${esc(g.id)}" style="flex:0 1 220px">${fighterTypePicker(g)}<select id="addrole-${g.id}" aria-label="Role">${opts(ROLE_OPTS(), "ganger")}</select><button data-act="addFighter" data-gang="${esc(g.id)}">Add fighter</button></div>
-      ${g.npc && !dead.length ? "" : graveyard}
     </section>
+    ${g.npc && !dead.length ? "" : graveyard}
     ${g.npc ? "" : `<section class="block gt-card">${renderGangTactics(g)}</section>`}</div>`;
   }).join("")}
   ${shown.length ? "" : `<div class="empty" style="margin-top:18px">${npc ? "No NPC sides yet." : "No player gangs yet."}</div>`}
