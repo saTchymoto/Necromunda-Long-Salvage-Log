@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111084606";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111111414";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -675,6 +675,7 @@ td.total { font-weight: 600; color: var(--ok); }
   <nav class="tabs" role="tablist" id="tabs">
     <button role="tab" data-tab="battles" aria-selected="true">Battles &amp; Cycles</button>
     <button role="tab" data-tab="gangs" aria-selected="false">Gangs &amp; fighters</button>
+    <button role="tab" data-tab="npcs" aria-selected="false">NPCs</button>
     <button role="tab" data-tab="territories" aria-selected="false">Territories &amp; Map</button>
     <button role="tab" data-tab="rules" aria-selected="false">Rules reference</button>
     <button role="tab" data-tab="equipment" aria-selected="false">Equipment Lists &amp; Trading Post</button>
@@ -1722,7 +1723,8 @@ function render() {
   const taHeights = {};
   for (const t of v.querySelectorAll("textarea[id]")) taHeights[t.id] = t.offsetHeight;
   if (S.tab === "battles") v.innerHTML = renderBattles();
-  else if (S.tab === "gangs") v.innerHTML = renderGangs();
+  else if (S.tab === "gangs") v.innerHTML = renderGangs(false);
+  else if (S.tab === "npcs") v.innerHTML = renderGangs(true);
   else if (S.tab === "territories") v.innerHTML = renderTerritories();
   else if (S.tab === "equipment") v.innerHTML = renderEquipment();
   else v.innerHTML = renderRules();
@@ -4347,13 +4349,14 @@ function setMundaXp(fid, raw) {
 }
 /* In the Graveyard: fighters no longer in the gang's roster (dead, sold or retired), and anyone the injury tracking has as dead. */
 const inGraveyard = f => isGone(f) || f.status === "retired" || availability().now[f.id]?.s === "dead";
-function renderGangs() {
-  const c = career(), refs = fighterRefs(), all = gangList();
-  if (S.gangView === undefined) { try { S.gangView = localStorage.getItem(LS_KEY + "-gang-view") || "all"; } catch (e) { S.gangView = "all"; } }
-  const view = S.gangView && S.gangs[S.gangView] ? S.gangView : "all";
+/* The players' gangs (Gangs & fighters tab) or the NPC sides (NPCs tab): the gang's "NPC side" box decides which tab it's on. */
+function renderGangs(npc) {
+  const c = career(), refs = fighterRefs(), all = gangList().filter(g => !!g.npc === npc), key = npc ? "npcView" : "gangView";
+  if (S[key] === undefined) { try { S[key] = localStorage.getItem(LS_KEY + (npc ? "-npc-view" : "-gang-view")) || "all"; } catch (e) { S[key] = "all"; } }
+  const view = S[key] && all.some(g => g.id === S[key]) ? S[key] : "all";
   /* Buttons to show one gang's roster, or every gang's. */
   const nav = `<div class="chips gang-views" role="group" aria-label="Show">
-    <button class="chip" data-act="gangView" data-id="all" aria-pressed="${view === "all"}">All gangs</button>
+    <button class="chip" data-act="gangView" data-id="all" aria-pressed="${view === "all"}">${npc ? "All NPCs" : "All gangs"}</button>
     ${all.map(g => `<button class="chip" data-act="gangView" data-id="${esc(g.id)}" aria-pressed="${view === g.id}">${gdot(g)}${esc(g.name)}</button>`).join("")}</div>`;
   const shown = view === "all" ? all : [S.gangs[view]];
   const thead = `<thead><tr><th>Fighter</th><th>Role</th><th>Status</th><th class="num">Battles</th><th class="num" title="XP on the last Munda Manager roster">Munda XP</th><th class="num" title="XP logged here after that roster">Since</th><th class="num" title="Munda XP plus XP since: what Munda Manager should show now">Should show</th><th class="num">OOA dealt</th><th class="num">Taken OOA</th><th>Lasting injuries</th><th>Note</th><th></th></tr></thead>`;
@@ -4384,7 +4387,7 @@ function renderGangs() {
         <label class="field" style="flex:1 1 220px">Gang<input type="text" id="g-${g.id}-name" data-bind="g.${g.id}.name" value="${esc(g.name)}"></label>
         <label class="field" style="flex:0 1 150px">Short name<input type="text" id="g-${g.id}-short" data-bind="g.${g.id}.short" value="${esc(g.short)}"></label>
         <label class="field" style="flex:0 1 150px">Player<input type="text" id="g-${g.id}-player" data-bind="g.${g.id}.player" value="${esc(g.player)}"></label>
-        <label class="check" style="padding-bottom:6px"><input type="checkbox" id="g-${g.id}-npc" data-bind="g.${g.id}.npc"${g.npc ? " checked" : ""}> NPC side (no XP)</label>
+        <label class="check" style="padding-bottom:6px" title="NPC sides are listed on the NPCs tab and don't gain XP"><input type="checkbox" id="g-${g.id}-npc" data-bind="g.${g.id}.npc"${g.npc ? " checked" : ""}> NPC side (no XP)</label>
       </div>
       <div class="muted" style="font-size:.82rem">${esc(g.type || "")}${heldBy(g.id).length ? ` · holds ${esc(heldBy(g.id).map(t => t.name).join(", "))}` : ""}${g.munda ? ` · Munda Manager: rating ${g.rating}, rep ${g.rep}, ${g.credits} credits · <a href="https://www.mundamanager.com/gang/${esc(g.munda)}" target="_blank" rel="noopener">Open gang</a>` : ""}</div>
       <div class="table-wrap"><table class="ftable">${thead}
@@ -4394,7 +4397,8 @@ function renderGangs() {
       ${g.npc && !dead.length ? "" : graveyard}
     </section>`;
   }).join("")}
-  <div class="toolbar"><button data-act="addGang">Add a gang or NPC side</button><span class="muted" style="font-size:.82rem">Munda XP is from the last Munda Manager roster; Since adds what's been logged here after it; Should show is what Munda Manager ought to say now. Fighters in a battle or post-cycle can't be removed: mark them retired or dead instead.</span></div>
+  ${shown.length ? "" : `<div class="empty" style="margin-top:18px">${npc ? "No NPC sides yet." : "No player gangs yet."}</div>`}
+  <div class="toolbar"><button data-act="addGang">${npc ? "Add an NPC side" : "Add a gang"}</button><span class="muted" style="font-size:.82rem">${npc ? "NPC sides don't gain XP and can't hold territories. Untick \"NPC side\" to move one to Gangs & fighters." : `Munda XP is from the last Munda Manager roster; Since adds what's been logged here after it; Should show is what Munda Manager ought to say now. Fighters in a battle or post-cycle can't be removed: mark them retired or dead instead.`}</span></div>
   </div>`;
 }
 
@@ -4853,7 +4857,9 @@ function setBound(el) {
     if (fld === "gang") r.fighter = "";
     touch(b); return el.tagName === "SELECT" ? "rerender" : fld === "amount" ? "rerender-soft" : "none";
   }
-  if (scope === "g") { const g = S.gangs[parts[1]]; g[parts[2]] = val; save("gangs", g.id); return el.type === "checkbox" || el.type === "color" ? "rerender" : "strip"; }
+  if (scope === "g") { const g = S.gangs[parts[1]]; g[parts[2]] = val; save("gangs", g.id);
+    if (parts[2] === "npc") setTimeout(() => toast(`${g.name} moved to ${val ? "the NPCs tab" : "Gangs & fighters"}`), 0);
+    return el.type === "checkbox" || el.type === "color" ? "rerender" : "strip"; }
   if (scope === "f") { const g = S.gangs[parts[1]]; const f = g.fighters.find(x => x.id === parts[2]); const was = f[parts[3]]; if (parts[3] === "role") setRole(f, val); else f[parts[3]] = val; save("gangs", g.id);
     if (parts[3] === "role" && !g.npc && (val === "champion" || val === "leader") && was !== val) setTimeout(() => toast(`New ${val === "leader" ? "Leader: roll 2 Gang Tactics" : "Champion: roll 1 Gang Tactic"} below`), 50); return el.tagName === "SELECT" ? "rerender" : "none"; }
 }
@@ -5256,10 +5262,11 @@ function act(a, el) {
     }
     case "delFighter": { if (fighterRefs().has(id)) { toast("This fighter is in a battle or post-cycle: mark them retired or dead instead"); return; }
       const g = S.gangs[el.dataset.gang]; g.fighters = g.fighters.filter(f => f.id !== id); save("gangs", g.id); render(); return; }
-    case "gangView": S.gangView = id; try { localStorage.setItem(LS_KEY + "-gang-view", id); } catch (e) {} render(); return;
+    case "gangView": { const npc = S.tab === "npcs"; S[npc ? "npcView" : "gangView"] = id; try { localStorage.setItem(LS_KEY + (npc ? "-npc-view" : "-gang-view"), id); } catch (e) {} render(); return; }
     case "addGang": {
-      const gid = uid("g-"); S.gangs[gid] = { id: gid, name: "New gang", short: "New gang", type: "", player: "", color: "#888888", npc: false, order: gangList().length + 1, fighters: [] };
-      if (S.gangView && S.gangView !== "all") S.gangView = gid;
+      const npc = S.tab === "npcs", key = npc ? "npcView" : "gangView", gid = uid("g-");
+      S.gangs[gid] = { id: gid, name: npc ? "New NPC side" : "New gang", short: npc ? "New NPC side" : "New gang", type: "", player: "", color: "#888888", npc, order: gangList().length + 1, fighters: [] };
+      if (S[key] && S[key] !== "all") S[key] = gid;
       save("gangs", gid); render(); $(`#g-${CSS.escape(gid)}-name`)?.select(); return;
     }
   }
