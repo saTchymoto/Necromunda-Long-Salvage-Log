@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111141236";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111142544";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -505,6 +505,10 @@ td.total { font-weight: 600; color: var(--ok); }
 .rules { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; margin-top: 18px; align-items: start; }
 .rules .rcol { display: grid; gap: 18px; min-width: 0; align-content: start; }
 .rules .house { grid-column: 1 / -1; }
+.rules-top { margin-top: 18px; }
+.rules-top select { max-width: calc(100vw - 100px); }
+.rules-top + .rules { margin-top: 12px; }
+.rules.one { grid-template-columns: minmax(0, 1fr); }
 /* Gangs & fighters: one gang or all, and each gang's Graveyard */
 .gang-views { margin-top: 18px; }
 .gang-views .chip { gap: 6px; }
@@ -682,8 +686,9 @@ td.total { font-weight: 600; color: var(--ok); }
     <button role="tab" data-tab="gangs" aria-selected="false">Gangs &amp; fighters</button>
     <button role="tab" data-tab="npcs" aria-selected="false">NPCs</button>
     <button role="tab" data-tab="territories" aria-selected="false">Territories &amp; Map</button>
-    <button role="tab" data-tab="rules" aria-selected="false">Rules reference</button>
     <button role="tab" data-tab="equipment" aria-selected="false">Equipment Lists &amp; Trading Post</button>
+    <!-- Rules reference stays the right-most tab: add new tabs before it. -->
+    <button role="tab" data-tab="rules" aria-selected="false">Rules reference</button>
   </nav>
   <main id="view"><div class="empty" style="margin-top:18px">Loading the campaign log…</div></main>
 </div>
@@ -1788,6 +1793,7 @@ function render() {
   markLineStarts();
   if (S.tab === "territories") { fitMapLabels(); fitMapRound(); }
   if (S.tab === "equipment") eqFilter();
+  if (S.tab === "rules") rulesFilter();
   if (keepFocus) {
     const f = document.getElementById(keepFocus);
     if (f) { f.focus({ preventScroll: true }); try { if (caret) f.setSelectionRange(caret[0], caret[1]); } catch (e) {} }
@@ -4658,6 +4664,17 @@ function eqFilter() {
   const buy = root.querySelector(".eq-buy"); if (buy) buy.hidden = !!words.length;
 }
 document.addEventListener("input", ev => { if (ev.target.id === "eq-q") { S.eqQ = ev.target.value; eqFilter(); } });
+/* Rules reference: a dropdown of every card on the tab, by its title, to show just that one. Opening the tab shows them all. */
+function rulesFilter() {
+  const root = document.querySelector(".rules"), sel = $("#rules-pick"); if (!root || !sel) return;
+  const secs = [...root.querySelectorAll("section.block")], title = sec => (sec.querySelector("h2")?.textContent || "").replace(/\s+/g, " ").trim();
+  if (sel.options.length <= 1) for (const sec of secs) { const t = title(sec); if (t) sel.add(new Option(t, t)); }
+  const v = S.rulesView || ""; sel.value = [...sel.options].some(o => o.value === v) ? v : "";
+  for (const sec of secs) sec.hidden = !!sel.value && title(sec) !== sel.value;
+  root.classList.toggle("one", !!sel.value);
+  for (const col of root.querySelectorAll(".rcol")) col.hidden = !!sel.value && !col.querySelector("section.block:not([hidden])");
+}
+document.addEventListener("change", ev => { if (ev.target.id === "rules-pick") { S.rulesView = ev.target.value; rulesFilter(); window.scrollTo({ top: document.querySelector(".rules-top")?.offsetTop - 10 || 0 }); } });
 function renderRules() {
   const rowsOf = list => list.map(r => `<tr><td class="range">${r[0] === r[1] ? r[0] : r[0] + "–" + r[1]}</td><td>${resultTag(r[2], r[3])}</td><td>${esc(r[4])}</td></tr>`).join("");
   const inj = rowsOf(INJURIES_N26), injOld = rowsOf(INJURIES_N23);
@@ -4708,7 +4725,8 @@ function renderRules() {
         <li>This includes fighters gained through Territory Boons.</li>
       </ol>
     </section>`;
-  return `<div class="rules">
+  return `<div class="toolbar rules-top"><label class="check">Show <select id="rules-pick" aria-label="Which rules to show"><option value="">All rules</option></select></label></div>
+  <div class="rules">
     ${house}
     <div class="rcol">
     <section class="block"><div class="block-head"><h2>Attacking and taking territory</h2><span class="rule-src">Source: House Rules</span></div>
@@ -5070,7 +5088,7 @@ document.addEventListener("keydown", ev => {
 document.addEventListener("click", ev => {
   if (S.mapMenu && !ev.target.closest(".mg-wrap")) { S.mapMenu = null; if (!ev.target.closest("[data-act],[data-tab]")) { render(); return; } }
   const t = ev.target.closest("[data-act]"); if (t) { ev.preventDefault(); act(t.dataset.act, t); return; }
-  const tab = ev.target.closest("[data-tab]"); if (tab) { S.tab = tab.dataset.tab; S.copyText = ""; render(); }
+  const tab = ev.target.closest("[data-tab]"); if (tab) { S.tab = tab.dataset.tab; S.copyText = ""; if (S.tab === "rules") S.rulesView = ""; render(); }
 });
 
 function act(a, el) {
