@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111112457";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111113309";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -67,7 +67,9 @@ header.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; j
 .save-state { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .restore-box { flex-basis: 100%; display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); text-align: left; font-size: .86rem; }
 .restore-rows { display: grid; gap: 2px; max-height: 320px; overflow: auto; }
-.act-box { max-height: 70vh; overflow: auto; }
+.act-box { max-height: 70vh; overflow: auto; padding-top: 0; }
+/* The top bar (who to show, Close) stays in view while the record scrolls. */
+.act-top { position: sticky; top: 0; z-index: 1; background: var(--panel); padding: 10px 0 6px; border-bottom: 1px solid var(--line); }
 .act-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .act-list > li { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; }
 .act-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: .86rem; }
@@ -1289,7 +1291,7 @@ function logActivity(kind, id, before, after, why) {
 let actView = null;
 async function showActivity(more) {
   const el = $("#restore-confirm"); el.hidden = false;
-  if (!more) { actView = { docs: [], last: null, who: actView?.who || "" }; el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Loading…</span></div>`; }
+  if (!more) { actView = { docs: [], last: null, who: actView?.who || "" }; el.innerHTML = `<div class="restore-box"><div class="toolbar" style="justify-content:space-between"><b>Log record</b><button data-act="cancelRestore">Close</button></div><span class="muted">Loading…</span></div>`; }
   try {
     let q = db.collection("activity").orderBy("at", "desc").limit(150);
     if (more && actView.last) q = q.startAfter(actView.last);
@@ -1302,8 +1304,9 @@ function renderActivity() {
   const list = v.docs.filter(d => !v.who || d.by === v.who);
   const when = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
   el.innerHTML = `<div class="restore-box act-box">
-    <div class="toolbar" style="justify-content:space-between"><b>Log record</b>
-      <label class="check">Show <select id="act-who" aria-label="Whose changes to show"><option value="">Everyone</option>${people.map(p => `<option${p === v.who ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label></div>
+    <div class="toolbar act-top" style="justify-content:space-between"><b>Log record</b>
+      <span class="toolbar" style="gap:8px"><label class="check">Show <select id="act-who" aria-label="Whose changes to show"><option value="">Everyone</option>${people.map(p => `<option${p === v.who ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
+      <button data-act="cancelRestore">Close</button></span></div>
     ${list.length ? `<ol class="act-list">${list.map(d => `<li><div class="act-head"><span class="mono muted">${esc(when(d.at))}</span><b>${esc(d.by || "?")}</b>
         ${d.kind === "battles" && S.battles[d.rid] ? `<button class="linkish" data-act="openBattle" data-id="${esc(d.rid)}">${esc(d.title)}</button>` : `<span>${esc(d.title || "")}</span>`}</div>
         <ul>${(d.lines || []).map(t => `<li>${esc(t)}</li>`).join("")}</ul></li>`).join("")}</ol>` : `<p class="muted" style="margin:0">Nothing recorded yet.</p>`}
