@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111140700";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111141236";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1219,6 +1219,12 @@ function actVal(v) {
   if (S.territories[t]) return S.territories[t].name || t;
   return t.length > 40 ? null : /^[\d.+-]+$/.test(t) ? t : `"${t}"`;
 }
+const roleLabel = f => (ROLES.find(r => r[0] === roleVal(f)) || [, f?.role || "no role"])[1];
+const statusLabel = v => (STATUSES.find(r => r[0] === v) || [, v || "Active"])[1];
+/* A fighter in one line for the Log record: type, role, and status or note when there is one. */
+function actFighter(x) {
+  return [x.type || "no fighter type", `role ${roleLabel(x)}`, x.status && x.status !== "active" ? statusLabel(x.status) : "", x.note ? `note "${x.note}"` : ""].filter(Boolean).join(", ");
+}
 function actItem(listKey, x) {
   if (!x || typeof x !== "object") return actVal(x);
   if (listKey === "events") return `${fname(x.by)} ${actName(x.action) || "?"}${x.target ? " → " + fname(x.target) : x.objective ? " " + x.objective : ""}${x.result ? " (" + resName(x.result) + ")" : ""}`;
@@ -1249,10 +1255,16 @@ function actDiff(kind, before, after, prefix = "") {
       const A = a || [], B = b || [];
       if ([...A, ...B].every(x => x && typeof x === "object" && x.id)) {
         const am = new Map(A.map(x => [x.id, x])), bm = new Map(B.map(x => [x.id, x]));
-        for (const [id, x] of bm) if (!am.has(id)) out.push([key + "+" + id, `added ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
-        for (const [id, x] of am) if (!bm.has(id)) out.push([key + "-" + id, `removed ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
+        /* Fighters: say which gang, and what they are (type, role, status), not just the name. */
+        const gname = (after || before)?.name || "the gang";
+        for (const [id, x] of bm) if (!am.has(id)) out.push([key + "+" + id, k === "fighters" ? `added ${x.name || "a fighter"} to ${gname}: ${actFighter(x)}` : `added ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
+        for (const [id, x] of am) if (!bm.has(id)) out.push([key + "-" + id, k === "fighters" ? `removed ${x.name || "a fighter"} from ${gname} (${actFighter(x)})` : `removed ${k === "events" ? "XP event: " : ""}${actItem(k, x)}`]);
         const fields = (x, y) => Object.keys({ ...x, ...y }).filter(f => !ACT_SKIP.has(f) && stable(x[f]) !== stable(y[f]));
-        const said = (x, f) => f.map(f => { const v = actVal(x[f]); return v ? `${fieldLabel(f)} → ${v}` : fieldLabel(f); }).join(", ");
+        const said = (x, f) => {
+          /* A fighter's role and Specialist flag are one choice on the roster: report them as the role it shows. */
+          if (k === "fighters" && (f.includes("role") || f.includes("specialist"))) f = [...f.filter(n => n !== "role" && n !== "specialist"), "role"];
+          return f.map(f => { const v = k === "fighters" && f === "role" ? roleLabel(x) : k === "fighters" && f === "status" ? statusLabel(x.status) : actVal(x[f]), lab = k === "fighters" && f === "type" ? "fighter type" : fieldLabel(f); return v ? `${lab} → ${v}` : lab; }).join(", ");
+        };
         for (const [id, x] of bm) { const y = am.get(id); if (!y || stable(x) === stable(y)) continue;
           const f = fields(x, y);
           if (f.length) out.push([key + "~" + id, `changed ${actItem(k, x)}: ${said(x, f)}`]);
