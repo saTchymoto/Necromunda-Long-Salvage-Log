@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111113309";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111114533";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1266,10 +1266,17 @@ function actTitle(kind, rec) {
   if (kind === "battles") return isPC(rec) ? `Post-cycle · ${/cycle/i.test(rec.cycle || "") ? rec.cycle : "Cycle " + (rec.cycle || "?")}` : `${battleTitle(rec)} (${fmtDate(rec.date)})`;
   return recLabel(kind, rec);
 }
+/* Who is making changes. Online (GitHub) version: the Google account. Claude copy: the viewer's Claude user id, which is stored
+   instead of a name (names are looked up when the record is shown, so they're always current). */
+let ACT_USER = null, USER_NS = null;
+function actWho() {
+  if (S.mode !== "db" || !db) return null;
+  if (HOSTED) { const u = window.firebase?.auth?.().currentUser; return u ? { by: u.displayName || u.email, email: u.email } : null; }
+  return ACT_USER?.uid ? { uid: ACT_USER.uid } : null;
+}
 /* Called after a record has been saved: before/after are the versions this person changed from and to. */
 function logActivity(kind, id, before, after, why) {
-  if (!HOSTED || S.mode !== "db" || !db) return;
-  const user = window.firebase?.auth?.().currentUser; if (!user) return;
+  const who = actWho(); if (!who) return;
   const now = Date.now(), title = actTitle(kind, after || before);
   let key, lines;
   if (why) { key = "why:" + why; lines = [["r:" + kind + id, title]]; }
@@ -1283,9 +1290,9 @@ function logActivity(kind, id, before, after, why) {
   if (!buf || now - buf.t > ACT_JOIN_MS) buf = actBuf[key] = { doc: `${new Date(now).toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 7)}`, start: new Date(now).toISOString(), lines: new Map() };
   buf.t = now; for (const [k, t] of lines) { buf.lines.delete(k); buf.lines.set(k, t); }
   const all = [...buf.lines.values()];
-  const rec = why ? { at: buf.start, last: new Date(now).toISOString(), by: user.displayName || user.email, email: user.email, kind: "bulk", rid: "", title: why,
+  const rec = why ? { at: buf.start, last: new Date(now).toISOString(), ...who, kind: "bulk", rid: "", title: why,
       lines: [`${all.length} record${all.length === 1 ? "" : "s"}: ${all.slice(0, 40).join(", ")}${all.length > 40 ? ", …" : ""}`] }
-    : { at: buf.start, last: new Date(now).toISOString(), by: user.displayName || user.email, email: user.email, kind, rid: id, title, lines: all.slice(-60) };
+    : { at: buf.start, last: new Date(now).toISOString(), ...who, kind, rid: id, title, lines: all.slice(-60) };
   db.doc("activity/" + buf.doc).set(rec).catch(() => {});
 }
 let actView = null;
@@ -1293,21 +1300,28 @@ async function showActivity(more) {
   const el = $("#restore-confirm"); el.hidden = false;
   if (!more) { actView = { docs: [], last: null, who: actView?.who || "" }; el.innerHTML = `<div class="restore-box"><div class="toolbar" style="justify-content:space-between"><b>Log record</b><button data-act="cancelRestore">Close</button></div><span class="muted">Loading…</span></div>`; }
   try {
-    let q = db.collection("activity").orderBy("at", "desc").limit(150);
-    if (more && actView.last) q = q.startAfter(actView.last);
-    const snap = await q.get(); actView.docs.push(...snap.docs.map(d => d.data())); actView.last = snap.docs[snap.docs.length - 1] || actView.last; actView.done = snap.docs.length < 150;
+    /* "Show older" asks for entries before the oldest one shown (works the same in both databases). */
+    let q = db.collection("activity");
+    if (more && actView.last) q = q.where("at", "<", actView.last);
+    const snap = await q.orderBy("at", "desc").limit(150).get(), got = snap.docs.map(d => d.data());
+    actView.docs.push(...got); actView.last = got.length ? got[got.length - 1].at : actView.last; actView.done = got.length < 150;
+    /* Claude copy: entries name people by their Claude id; look the names up now. */
+    const ids = [...new Set(actView.docs.filter(d => d.uid && !d.by).map(d => d.uid))];
+    if (USER_NS && ids.length) { try { const ps = await USER_NS.profiles(ids); for (const id of ids) actNames[id] = ps?.[id]?.name || actNames[id] || ""; } catch (e) {} }
     renderActivity();
   } catch (e) { el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Couldn't load the log record${e?.code === "permission-denied" ? ": the database rules don't allow it yet" : ""}.</span><div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`; }
 }
+const actNames = {};
+const actBy = d => d.by || (d.uid ? actNames[d.uid] || (d.uid === ACT_USER?.uid ? "You" : "Someone") : "?");
 function renderActivity() {
-  const el = $("#restore-confirm"), v = actView, people = [...new Set(v.docs.map(d => d.by).filter(Boolean))].sort();
-  const list = v.docs.filter(d => !v.who || d.by === v.who);
+  const el = $("#restore-confirm"), v = actView, people = [...new Set(v.docs.map(actBy).filter(Boolean))].sort();
+  const list = v.docs.filter(d => !v.who || actBy(d) === v.who);
   const when = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
   el.innerHTML = `<div class="restore-box act-box">
     <div class="toolbar act-top" style="justify-content:space-between"><b>Log record</b>
       <span class="toolbar" style="gap:8px"><label class="check">Show <select id="act-who" aria-label="Whose changes to show"><option value="">Everyone</option>${people.map(p => `<option${p === v.who ? " selected" : ""}>${esc(p)}</option>`).join("")}</select></label>
       <button data-act="cancelRestore">Close</button></span></div>
-    ${list.length ? `<ol class="act-list">${list.map(d => `<li><div class="act-head"><span class="mono muted">${esc(when(d.at))}</span><b>${esc(d.by || "?")}</b>
+    ${list.length ? `<ol class="act-list">${list.map(d => `<li><div class="act-head"><span class="mono muted">${esc(when(d.at))}</span><b>${esc(actBy(d))}</b>
         ${d.kind === "battles" && S.battles[d.rid] ? `<button class="linkish" data-act="openBattle" data-id="${esc(d.rid)}">${esc(d.title)}</button>` : `<span>${esc(d.title || "")}</span>`}</div>
         <ul>${(d.lines || []).map(t => `<li>${esc(t)}</li>`).join("")}</ul></li>`).join("")}</ol>` : `<p class="muted" style="margin:0">Nothing recorded yet.</p>`}
     <div class="toolbar" style="justify-content:flex-end">${v.done ? "" : `<button data-act="actMore">Show older</button>`}<button data-act="cancelRestore">Close</button></div></div>`;
@@ -1371,6 +1385,7 @@ function runOnlinePatches() {
   if (onlinePatched || S.mode !== "db" || !S.loaded || !S.territories._meta) return;
   onlinePatched = true;
   if (HOSTED) { $("#rp-btn").hidden = false; $("#act-btn").hidden = false; setTimeout(makeRestorePoint, 8000); }
+  else if (ACT_USER) { $("#act-btn").hidden = false; setTimeout(pruneActivity, 8000); }
   const m = S.territories._meta;
   if (!Array.isArray(m.applied)) { m.applied = ROSTER_PATCHES.map(p => p.id); save("territories", "_meta"); return; }
   const snap = {}; for (const k of ["gangs", "battles", "territories"]) for (const [id, v] of Object.entries(S[k])) snap[k + "/" + id] = stable(v);
@@ -1607,7 +1622,11 @@ function watchForUpdates() {
 }
 async function boot() {
   try {
-    if (window.claude && typeof window.claude.use === "function") db = await window.claude.use("db");
+    if (window.claude && typeof window.claude.use === "function") {
+      db = await window.claude.use("db");
+      /* Claude copy: who's viewing, for the Log record. Without it the log still works, just unrecorded. */
+      try { USER_NS = await window.claude.use("user"); const id = USER_NS ? await USER_NS.id() : null; if (id) ACT_USER = { uid: id }; } catch (e) {}
+    }
     else if (window.FB_CONFIG && window.firebase) db = await firebaseDb();
   } catch (e) { db = null; }
   /* The hosted version never falls back to saving in this browser only: without the database, nothing would be shared. */
