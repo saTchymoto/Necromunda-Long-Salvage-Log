@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261110150113";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111084606";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -503,6 +503,14 @@ td.total { font-weight: 600; color: var(--ok); }
 .rules { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; margin-top: 18px; align-items: start; }
 .rules .rcol { display: grid; gap: 18px; min-width: 0; align-content: start; }
 .rules .house { grid-column: 1 / -1; }
+/* Gangs & fighters: one gang or all, and each gang's Graveyard */
+.gang-views { margin-top: 18px; }
+.gang-views .chip { gap: 6px; }
+.graveyard { display: grid; gap: 6px; padding-top: 10px; border-top: 2px dashed var(--line); }
+.graveyard h3 { display: flex; gap: 6px; align-items: baseline; }
+.graveyard .gy-n { font-family: var(--font-mono); font-size: .8rem; }
+.graveyard .gy-note { margin: 0; font-size: .82rem; }
+.graveyard .ftable { opacity: .85; }
 /* Equipment Lists & Trading Post */
 .eq { display: grid; gap: 16px; margin-top: 18px; min-width: 0; }
 .eq > *, .eq-group, .eq-sec { min-width: 0; }
@@ -4337,10 +4345,20 @@ function setMundaXp(fid, raw) {
   save("gangs", g.id); render();
   toast(off ? `${f.name}: Munda Manager shows ${val}, the log expected ${before.now}` : val === null ? `${f.name}: Munda XP cleared` : `${f.name}: Munda XP ${val} saved`);
 }
+/* In the Graveyard: fighters no longer in the gang's roster (dead, sold or retired), and anyone the injury tracking has as dead. */
+const inGraveyard = f => isGone(f) || f.status === "retired" || availability().now[f.id]?.s === "dead";
 function renderGangs() {
-  const c = career(), refs = fighterRefs();
-  return `<div class="roster">${gangList().map(g => {
-    const trs = (g.fighters || []).map(f => {
+  const c = career(), refs = fighterRefs(), all = gangList();
+  if (S.gangView === undefined) { try { S.gangView = localStorage.getItem(LS_KEY + "-gang-view") || "all"; } catch (e) { S.gangView = "all"; } }
+  const view = S.gangView && S.gangs[S.gangView] ? S.gangView : "all";
+  /* Buttons to show one gang's roster, or every gang's. */
+  const nav = `<div class="chips gang-views" role="group" aria-label="Show">
+    <button class="chip" data-act="gangView" data-id="all" aria-pressed="${view === "all"}">All gangs</button>
+    ${all.map(g => `<button class="chip" data-act="gangView" data-id="${esc(g.id)}" aria-pressed="${view === g.id}">${gdot(g)}${esc(g.name)}</button>`).join("")}</div>`;
+  const shown = view === "all" ? all : [S.gangs[view]];
+  const thead = `<thead><tr><th>Fighter</th><th>Role</th><th>Status</th><th class="num">Battles</th><th class="num" title="XP on the last Munda Manager roster">Munda XP</th><th class="num" title="XP logged here after that roster">Since</th><th class="num" title="Munda XP plus XP since: what Munda Manager should show now">Should show</th><th class="num">OOA dealt</th><th class="num">Taken OOA</th><th>Lasting injuries</th><th>Note</th><th></th></tr></thead>`;
+  return `${nav}<div class="roster">${shown.map(g => {
+    const row = f => {
       const k = c[f.id] || { battles: 0, xp: 0, ooa: 0, downed: 0, injuries: [], removed: [] };
       const lasting = lastingList(f, k, false);
       if (f.status === "captured") lasting.push({ name: "Captured", kind: "info", src: f.note || "Currently captured" });
@@ -4354,7 +4372,12 @@ function renderGangs() {
         <td><textarea class="grow" rows="1" id="f-${f.id}-note" data-bind="f.${g.id}.${f.id}.note" placeholder="Note" aria-label="Note">${esc(f.note)}</textarea></td>
         <td>${used ? "" : `<button class="ghost danger" data-act="delFighter" data-gang="${esc(g.id)}" data-id="${esc(f.id)}" aria-label="Remove fighter">✕</button>`}</td>
       </tr>`;
-    }).join("");
+    };
+    const fs = g.fighters || [], trs = fs.filter(f => !inGraveyard(f)).map(row).join(""), dead = fs.filter(inGraveyard);
+    const graveyard = `<div class="graveyard"><h3><span aria-hidden="true">🪦</span> Graveyard${dead.length ? ` <span class="muted gy-n">${dead.length}</span>` : ""}</h3>
+      ${dead.length ? `<div class="table-wrap"><table class="ftable">${thead}<tbody>${dead.map(row).join("")}</tbody></table></div>
+        <p class="muted gy-note">Dead, sold and retired fighters. Change a fighter's status back to Active to return them to the roster.${dead.some(f => !isGone(f) && f.status !== "retired") ? " Fighters the injury tracking has as dead are here too: set their status to Dead." : ""}</p>`
+        : `<p class="muted gy-note">No fallen fighters yet.</p>`}</div>`;
     return `<section class="block">
       <div class="gang-head">
         <input type="color" id="g-${g.id}-color" data-bind="g.${g.id}.color" value="${esc(g.color || "#888888")}" aria-label="Gang colour">
@@ -4364,10 +4387,11 @@ function renderGangs() {
         <label class="check" style="padding-bottom:6px"><input type="checkbox" id="g-${g.id}-npc" data-bind="g.${g.id}.npc"${g.npc ? " checked" : ""}> NPC side (no XP)</label>
       </div>
       <div class="muted" style="font-size:.82rem">${esc(g.type || "")}${heldBy(g.id).length ? ` · holds ${esc(heldBy(g.id).map(t => t.name).join(", "))}` : ""}${g.munda ? ` · Munda Manager: rating ${g.rating}, rep ${g.rep}, ${g.credits} credits · <a href="https://www.mundamanager.com/gang/${esc(g.munda)}" target="_blank" rel="noopener">Open gang</a>` : ""}</div>
-      <div class="table-wrap"><table class="ftable"><thead><tr><th>Fighter</th><th>Role</th><th>Status</th><th class="num">Battles</th><th class="num" title="XP on the last Munda Manager roster">Munda XP</th><th class="num" title="XP logged here after that roster">Since</th><th class="num" title="Munda XP plus XP since: what Munda Manager should show now">Should show</th><th class="num">OOA dealt</th><th class="num">Taken OOA</th><th>Lasting injuries</th><th>Note</th><th></th></tr></thead>
+      <div class="table-wrap"><table class="ftable">${thead}
       <tbody>${trs}</tbody></table></div>
       <div class="toolbar"><input type="text" id="add-${g.id}" aria-label="New fighter name" placeholder="New fighter name" data-enter="addFighter" data-gang="${esc(g.id)}" style="flex:0 1 220px"><input type="text" id="addtype-${g.id}" placeholder="Fighter type" aria-label="Fighter type" data-enter="addFighter" data-gang="${esc(g.id)}" style="flex:0 1 300px"><select id="addrole-${g.id}" aria-label="Role">${opts(ROLE_OPTS(), "ganger")}</select><button data-act="addFighter" data-gang="${esc(g.id)}">Add fighter</button></div>
       ${g.npc ? "" : renderGangTactics(g)}
+      ${g.npc && !dead.length ? "" : graveyard}
     </section>`;
   }).join("")}
   <div class="toolbar"><button data-act="addGang">Add a gang or NPC side</button><span class="muted" style="font-size:.82rem">Munda XP is from the last Munda Manager roster; Since adds what's been logged here after it; Should show is what Munda Manager ought to say now. Fighters in a battle or post-cycle can't be removed: mark them retired or dead instead.</span></div>
@@ -5232,8 +5256,10 @@ function act(a, el) {
     }
     case "delFighter": { if (fighterRefs().has(id)) { toast("This fighter is in a battle or post-cycle: mark them retired or dead instead"); return; }
       const g = S.gangs[el.dataset.gang]; g.fighters = g.fighters.filter(f => f.id !== id); save("gangs", g.id); render(); return; }
+    case "gangView": S.gangView = id; try { localStorage.setItem(LS_KEY + "-gang-view", id); } catch (e) {} render(); return;
     case "addGang": {
       const gid = uid("g-"); S.gangs[gid] = { id: gid, name: "New gang", short: "New gang", type: "", player: "", color: "#888888", npc: false, order: gangList().length + 1, fighters: [] };
+      if (S.gangView && S.gangView !== "all") S.gangView = gid;
       save("gangs", gid); render(); $(`#g-${CSS.escape(gid)}-name`)?.select(); return;
     }
   }
@@ -5458,7 +5484,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-10";
+const APP_BUILD = "2026-11-11";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
