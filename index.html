@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111111414";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111112457";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1058,6 +1058,11 @@ let snapshotLocalLater = false;
 /* One-time roster additions for copies of the log kept in a browser. Each runs once (tracked in config.applied),
    adds only fighters that aren't there yet, and slots each one in after the fighter named in `after`. */
 const ROSTER_PATCHES = [
+  /* "Open gang" links go to the gangs made for the current rules on Munda Manager (11 Nov 2026), not the old-rules gangs. */
+  { id: "2026-11-11-munda-links", run() {
+    const ids = { gsc: "865d2b2d-e41e-4901-9d60-f3e1c2660407", delaque: "db08ff63-1b82-4fb4-a75f-1425c87f0564", fangs: "db75a26a-9f29-4968-9f0a-097f59aa68ec", kyn: "d13d57db-a9ab-4268-bad6-5a706e3641d6" };
+    for (const [gid, m] of Object.entries(ids)) if (S.gangs[gid]) S.gangs[gid].munda = m;
+  } },
   /* Hive Watchers are Hanger-on, Support (fixes copies that already ran the 30 Oct type fix). */
   { id: "2026-10-30-hive-watcher", run() { for (const g of Object.values(S.gangs || {})) for (const f of g.fighters || []) if (/^Hive Watcher \(Hanger-on\)$/.test(f.type || "")) f.type = "Hive Watcher (Hanger-on, Support)"; } },
   /* Fighter types written the same way for every model, Munda Manager style: "Model (Subtypes), Specialism" (30 Oct rosters). */
