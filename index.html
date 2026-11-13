@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261111142544";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261113192238";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -411,11 +411,18 @@ section.block { background: var(--panel); border: 1px solid var(--line); border-
 
 /* XP log rows */
 .rows { display: grid; gap: 6px; }
-.row { display: grid; grid-template-columns: 26px minmax(0,1.2fr) 172px minmax(0,1.2fr) 172px 84px 52px; gap: 6px; align-items: center; padding: 5px 6px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--line); }
+.row { display: grid; grid-template-columns: 38px minmax(0,1.2fr) 172px minmax(0,1.2fr) 172px 84px 52px; gap: 6px; align-items: center; padding: 5px 6px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--line); }
 .row.head { background: none; border: 0; padding-block: 0; font-size: .72rem; color: var(--muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
 /* The Action taker and Target fields start after a gang colour square: line their labels up with the fields. */
 .row.head > span:nth-child(2), .row.head > span:nth-child(4) { padding-left: 16px; }
 .row .n { font-family: var(--font-mono); font-size: .75rem; color: var(--muted); text-align: right; }
+/* The event number is also its drag handle. */
+.row .ev-handle { min-height: 0; height: 26px; padding: 0 4px; border: 0; background: none; font-weight: 600; cursor: grab; touch-action: none; border-radius: var(--r); }
+.row .ev-handle::before { content: "⠿"; margin-right: 2px; opacity: .55; }
+.row .ev-handle:hover { color: var(--ink); background: var(--sunk); }
+.row.moving { opacity: .5; }
+.rows .row.drop-before, .rows .round-head.drop-before { box-shadow: 0 -3px 0 0 var(--gold); }
+.rows .row.drop-after, .rows .round-head.drop-after { box-shadow: 0 3px 0 0 var(--gold); }
 .row .who { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .row .who select { flex: 1; width: 100%; }
 .row select, .row input { width: 100%; }
@@ -598,8 +605,8 @@ td.total { font-weight: 600; color: var(--ok); }
 @media (max-width: 760px) {
   h1 { font-size: 1.8rem; }
   .ds-grid { grid-template-columns: minmax(0, 1fr); }
-  .row { grid-template-columns: 22px minmax(0,1fr) minmax(0,1fr) 34px; }
-  .row.composer { grid-template-columns: 22px minmax(0,1fr) minmax(0,1fr) 56px; }
+  .row { grid-template-columns: 34px minmax(0,1fr) minmax(0,1fr) 34px; }
+  .row.composer { grid-template-columns: 34px minmax(0,1fr) minmax(0,1fr) 56px; }
   .row.head { display: none; }
   .row > .c-by { grid-column: 2 / 4; }
   .row > .c-act { grid-column: 2 / 3; }
@@ -2295,8 +2302,8 @@ function renderLog(b) {
     const xpTag = x.manual ? `<span class="tag xpv" title="Set by hand">${x.xp} XP</span>`
       : x.na ? `<span class="tag zero" title="${esc(x.why)}">N/A</span>`
       : `<span class="tag ${x.xp ? "xpv" : "zero"}" title="${x.bonus ? `Includes +1 for taking ${bonusText(b)} Out of Action` : esc(x.why || "")}">${x.xp}${x.bonus ? "*" : ""} XP</span>`;
-    return `<div class="row">
-      <span class="n">${i + 1}</span>
+    return `<div class="row" data-ev="${e.id}">
+      <button class="n ev-handle" data-id="${e.id}" aria-label="Move event ${i + 1}. Drag, or use the arrow keys" title="Drag to move, also into another round (or focus and press ↑/↓)">${i + 1}</button>
       <div class="who c-by">${gdot(S.gangs[by?.gang])}<select id="ev-${e.id}-by" data-bind="ev.${e.id}.by" aria-label="Action taker">${fighterOptions(b, e.by, { skip: bySkip(b, e.action, e.id) })}</select></div>
       <div class="c-act"><select id="ev-${e.id}-action" data-bind="ev.${e.id}.action" aria-label="Action">${opts(actOpts(actionsFor(b, e.action)), a)}</select></div>
       <div class="who c-tg">${obj ? `${gdot(S.gangs[by?.gang])}<select id="ev-${e.id}-objective" data-bind="ev.${e.id}.objective" aria-label="Objective">${opts(OBJECTIVES.includes(e.objective || "Objective 1") ? OBJECTIVES : [...OBJECTIVES, e.objective], e.objective || "Objective 1")}</select>` : `${gdot(S.gangs[tg?.gang])}<select id="ev-${e.id}-target" data-bind="ev.${e.id}.target" aria-label="Target">${fighterOptions(b, e.target, { placeholder: fall ? FLOOR : undefined, skip: a === "Assist" ? noAssist : null })}</select>`}</div>
@@ -2332,7 +2339,7 @@ function renderLog(b) {
           ${list.length ? `<button data-act="nextRound">End round ${r} · start round ${r + 1}</button>` : `<button data-act="uneventfulRound">Uneventful round</button>`}
           ${r > 1 && !list.length ? `<button class="ghost" data-act="dropRound">Remove round ${r}</button>` : ""}</div>` : "";
       return `<div class="round${last ? " current" : ""}">
-        <div class="round-head"><span class="tag round-tag">Round ${r}</span>${roundTags(b, r).map(([t, k]) => `<span class="tag ${k} rtag">${esc(t)}</span>`).join("")}${unev.has(r) && !list.length ? `<button class="ghost" data-act="undoUneventful" data-id="${r}" title="Log events in this round after all" style="font-size:.78rem">Undo</button>` : ""}</div>
+        <div class="round-head" data-round="${r}"><span class="tag round-tag">Round ${r}</span>${roundTags(b, r).map(([t, k]) => `<span class="tag ${k} rtag">${esc(t)}</span>`).join("")}${unev.has(r) && !list.length ? `<button class="ghost" data-act="undoUneventful" data-id="${r}" title="Log events in this round after all" style="font-size:.78rem">Undo</button>` : ""}</div>
         ${list.map(e => evRow(e, idx.get(e.id))).join("")}
         ${last ? composer + controls : ""}
       </div>`;
@@ -5031,6 +5038,62 @@ document.addEventListener("keydown", ev => {
   if (nb) { const arr = listOrdered().filter(b => b.id !== id), t = arr.findIndex(b => b.id === nb.id); moveBattle(id, up ? t : t + 1); }
   document.querySelector(`.blist .item[data-id="${CSS.escape(it.dataset.id)}"]`)?.focus();
 });
+/* Battle XP log: drag an event by its number (mouse or touch), or focus the number and press ↑/↓, to put it in the right order.
+   Dropping it on a row in another round, or just below a round's heading, moves it into that round; ↑ on the first event of a
+   round moves it to the end of the round before, ↓ on the last moves it to the start of the next. */
+function evMoveTo(id, place) {
+  const b = cur(); if (!b || isPC(b)) return; const arr = b.events || [], from = arr.findIndex(e => e.id === id); if (from < 0) return;
+  const [m] = arr.splice(from, 1), rounds = usesRounds(b) || (!b.noRounds && m.round);
+  let to = arr.length, r = m.round;
+  if (place.target) { const t = arr.findIndex(e => e.id === place.target); if (t < 0) { arr.splice(from, 0, m); return; } to = place.after ? t + 1 : t; r = arr[t].round; }
+  else if (place.round) {  /* the start of a round (or, with end: true, the end of it) */
+    r = place.round; const firstLater = arr.findIndex(e => (e.round || 0) > r), firstHere = arr.findIndex(e => (e.round || 0) >= r);
+    to = place.end ? (firstLater < 0 ? arr.length : firstLater) : (firstHere < 0 ? arr.length : firstHere);
+  } else to = Math.max(0, Math.min(arr.length, place.index));
+  if (rounds && r) { m.round = r; if ((b.uneventful || []).includes(r)) b.uneventful = b.uneventful.filter(x => x !== r); }
+  arr.splice(to, 0, m); touch(b); render();
+  document.querySelector(`.ev-handle[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+}
+let evDrag = null;
+const evTargets = () => [...document.querySelectorAll(".rows .row[data-ev], .rows .round-head[data-round]")];
+const evClearDrop = () => evTargets().forEach(x => x.classList.remove("drop-before", "drop-after", "moving"));
+document.addEventListener("pointerdown", ev => {
+  const h = ev.target.closest?.(".ev-handle"); if (!h || ev.button > 0) return;
+  ev.preventDefault();
+  evDrag = { id: h.dataset.id, pid: ev.pointerId, y: ev.clientY, started: false, el: null, after: false };
+  try { h.setPointerCapture(ev.pointerId); } catch (e) {}
+});
+document.addEventListener("pointermove", ev => {
+  if (!evDrag || ev.pointerId !== evDrag.pid) return;
+  if (!evDrag.started) { if (Math.abs(ev.clientY - evDrag.y) < 4) return; evDrag.started = true; document.body.classList.add("pca-dragging"); document.querySelector(`.row[data-ev="${CSS.escape(evDrag.id)}"]`)?.classList.add("moving"); }
+  ev.preventDefault();
+  const ts = evTargets(); let el = null, after = false;
+  for (const t of ts) { const r = t.getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { el = t; after = false; break; } el = t; after = true; }
+  ts.forEach(t => t.classList.remove("drop-before", "drop-after"));
+  if (el && el.dataset.ev !== evDrag.id) el.classList.add(after ? "drop-after" : "drop-before");
+  evDrag.el = el; evDrag.after = after;
+  const edge = 60; if (ev.clientY < edge) window.scrollBy(0, -14); else if (ev.clientY > window.innerHeight - edge) window.scrollBy(0, 14);
+}, { passive: false });
+function evEndDrag(ev, cancel) {
+  if (!evDrag || (ev && ev.pointerId !== evDrag.pid)) return;
+  const d = evDrag; evDrag = null; evClearDrop(); document.body.classList.remove("pca-dragging");
+  if (cancel || !d.started || !d.el || d.el.dataset.ev === d.id) return;
+  if (d.el.dataset.ev) evMoveTo(d.id, { target: d.el.dataset.ev, after: d.after });
+  else { const r = +d.el.dataset.round; evMoveTo(d.id, d.after || r === 1 ? { round: r } : { round: r - 1, end: true }); }
+}
+document.addEventListener("pointerup", ev => evEndDrag(ev, false));
+document.addEventListener("pointercancel", ev => evEndDrag(ev, true));
+document.addEventListener("keydown", ev => {
+  const h = ev.target.closest?.(".ev-handle"); if (!h || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+  ev.preventDefault();
+  const b = cur(), evs = b.events || [], i = evs.findIndex(e => e.id === h.dataset.id), e = evs[i], up = ev.key === "ArrowUp"; if (!e) return;
+  if (usesRounds(b)) {
+    const n = roundCount(b), mine = evs.filter(x => x.round === e.round), k = mine.indexOf(e);
+    if (up && k === 0) { if (e.round > 1) evMoveTo(e.id, { round: e.round - 1, end: true }); return; }
+    if (!up && k === mine.length - 1) { if (e.round < n) evMoveTo(e.id, { round: e.round + 1 }); return; }
+    evMoveTo(e.id, { target: mine[k + (up ? -1 : 1)].id, after: !up });
+  } else evMoveTo(e.id, { index: i + (up ? -1 : 1) });
+});
 /* Post-cycle action cards: drag by the ⠿ handle (mouse or touch), or focus the handle and press ↑/↓. */
 function pcMove(id, to) {
   const b = cur(); if (!isPC(b)) return; const arr = b.actions || [], from = arr.findIndex(a => a.id === id); if (from < 0) return;
@@ -5602,7 +5665,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-11";
+const APP_BUILD = "2026-11-13";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
