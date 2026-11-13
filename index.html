@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261113192238";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261113192551";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -420,7 +420,11 @@ section.block { background: var(--panel); border: 1px solid var(--line); border-
 .row .ev-handle { min-height: 0; height: 26px; padding: 0 4px; border: 0; background: none; font-weight: 600; cursor: grab; touch-action: none; border-radius: var(--r); }
 .row .ev-handle::before { content: "⠿"; margin-right: 2px; opacity: .55; }
 .row .ev-handle:hover { color: var(--ink); background: var(--sunk); }
-.row.moving { opacity: .5; }
+.row.moving, .pca.moving { opacity: .3; }
+.drag-ghost { position: fixed; z-index: 200; margin: 0; pointer-events: none; opacity: .92; transform: rotate(-1deg) scale(1.01);
+  box-shadow: 0 10px 28px rgba(0,0,0,.35); border-color: var(--accent) !important; background: var(--panel); transition: none; }
+/* A tall card (a busy post-cycle action) is shown as its top part only, fading out, so the drop line stays visible. */
+.drag-ghost.pca { max-height: 150px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
 .rows .row.drop-before, .rows .round-head.drop-before { box-shadow: 0 -3px 0 0 var(--gold); }
 .rows .row.drop-after, .rows .round-head.drop-after { box-shadow: 0 3px 0 0 var(--gold); }
 .row .who { display: flex; gap: 6px; align-items: center; min-width: 0; }
@@ -5054,6 +5058,21 @@ function evMoveTo(id, place) {
   arr.splice(to, 0, m); touch(b); render();
   document.querySelector(`.ev-handle[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
 }
+/* While dragging an XP log entry or a post-cycle action card: a copy of it follows the pointer, like dragging a battle card,
+   and the gold line shows where it will land. */
+function dragGhost(el, ev) {
+  const r = el.getBoundingClientRect(), g = el.cloneNode(true);
+  g.classList.remove("moving", "drop-before", "drop-after"); g.classList.add("drag-ghost"); g.removeAttribute("id");
+  g.querySelectorAll("[id]").forEach(x => x.removeAttribute("id")); g.setAttribute("aria-hidden", "true");
+  /* keep what the fields show (cloned selects and text boxes don't carry the current value over) */
+  const src = el.querySelectorAll("select, input, textarea"), dst = g.querySelectorAll("select, input, textarea");
+  src.forEach((x, i) => { if (dst[i]) dst[i].value = x.value; });
+  Object.assign(g.style, { width: r.width + "px", left: r.left + "px", top: r.top + "px" });
+  document.body.appendChild(g);
+  return { el: g, dx: ev.clientX - r.left, dy: ev.clientY - r.top };
+}
+function moveGhost(gh, ev) { if (gh) { gh.el.style.left = (ev.clientX - gh.dx) + "px"; gh.el.style.top = (ev.clientY - gh.dy) + "px"; } }
+const dropGhost = gh => gh?.el.remove();
 let evDrag = null;
 const evTargets = () => [...document.querySelectorAll(".rows .row[data-ev], .rows .round-head[data-round]")];
 const evClearDrop = () => evTargets().forEach(x => x.classList.remove("drop-before", "drop-after", "moving"));
@@ -5065,8 +5084,9 @@ document.addEventListener("pointerdown", ev => {
 });
 document.addEventListener("pointermove", ev => {
   if (!evDrag || ev.pointerId !== evDrag.pid) return;
-  if (!evDrag.started) { if (Math.abs(ev.clientY - evDrag.y) < 4) return; evDrag.started = true; document.body.classList.add("pca-dragging"); document.querySelector(`.row[data-ev="${CSS.escape(evDrag.id)}"]`)?.classList.add("moving"); }
-  ev.preventDefault();
+  if (!evDrag.started) { if (Math.abs(ev.clientY - evDrag.y) < 4) return; evDrag.started = true; document.body.classList.add("pca-dragging");
+    const row = document.querySelector(`.row[data-ev="${CSS.escape(evDrag.id)}"]`); if (row) { evDrag.ghost = dragGhost(row, ev); row.classList.add("moving"); } }
+  ev.preventDefault(); moveGhost(evDrag.ghost, ev);
   const ts = evTargets(); let el = null, after = false;
   for (const t of ts) { const r = t.getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { el = t; after = false; break; } el = t; after = true; }
   ts.forEach(t => t.classList.remove("drop-before", "drop-after"));
@@ -5076,7 +5096,7 @@ document.addEventListener("pointermove", ev => {
 }, { passive: false });
 function evEndDrag(ev, cancel) {
   if (!evDrag || (ev && ev.pointerId !== evDrag.pid)) return;
-  const d = evDrag; evDrag = null; evClearDrop(); document.body.classList.remove("pca-dragging");
+  const d = evDrag; evDrag = null; dropGhost(d.ghost); evClearDrop(); document.body.classList.remove("pca-dragging");
   if (cancel || !d.started || !d.el || d.el.dataset.ev === d.id) return;
   if (d.el.dataset.ev) evMoveTo(d.id, { target: d.el.dataset.ev, after: d.after });
   else { const r = +d.el.dataset.round; evMoveTo(d.id, d.after || r === 1 ? { round: r } : { round: r - 1, end: true }); }
@@ -5109,8 +5129,9 @@ document.addEventListener("pointerdown", ev => {
 });
 document.addEventListener("pointermove", ev => {
   if (!pcDrag || ev.pointerId !== pcDrag.pid) return;
-  if (!pcDrag.started) { if (Math.abs(ev.clientY - pcDrag.y) < 4) return; pcDrag.started = true; document.body.classList.add("pca-dragging"); document.querySelector(`.pca[data-id="${CSS.escape(pcDrag.id)}"]`)?.classList.add("moving"); }
-  ev.preventDefault();
+  if (!pcDrag.started) { if (Math.abs(ev.clientY - pcDrag.y) < 4) return; pcDrag.started = true; document.body.classList.add("pca-dragging");
+    const card = document.querySelector(`.pca[data-id="${CSS.escape(pcDrag.id)}"]`); if (card) { pcDrag.ghost = dragGhost(card, ev); card.classList.add("moving"); } }
+  ev.preventDefault(); moveGhost(pcDrag.ghost, ev);
   const cards = [...document.querySelectorAll(".pca")]; let target = null, after = false;
   for (const c of cards) { const r = c.getBoundingClientRect(); if (ev.clientY < r.top + r.height / 2) { target = c; after = false; break; } target = c; after = true; }
   cards.forEach(c => c.classList.remove("drop-before", "drop-after"));
@@ -5120,7 +5141,7 @@ document.addEventListener("pointermove", ev => {
 }, { passive: false });
 function pcEndDrag(ev, cancel) {
   if (!pcDrag || (ev && ev.pointerId !== pcDrag.pid)) return;
-  const d = pcDrag; pcDrag = null; pcClearDrop(); document.body.classList.remove("pca-dragging");
+  const d = pcDrag; pcDrag = null; dropGhost(d.ghost); pcClearDrop(); document.body.classList.remove("pca-dragging");
   if (cancel || !d.started || !d.target || d.target === d.id) return;
   const b = cur(); const rest = (b.actions || []).filter(a => a.id !== d.id); const t = rest.findIndex(a => a.id === d.target);
   pcMove(d.id, d.after ? t + 1 : t);
