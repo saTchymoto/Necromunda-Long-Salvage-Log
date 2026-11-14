@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114101253";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114113816";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -519,6 +519,17 @@ td.total { font-weight: 600; color: var(--ok); }
 .ftable td input[type="text"], .ftable td textarea.grow { width: 100%; min-width: 110px; }
 .ftable td select { min-width: 96px; }
 .ftable tr.dead td:first-child input { text-decoration: line-through; }
+/* A fighter and their beasts: one tall row with an accent bar down the left; the beast's lines are indented under the owner. */
+.ftable tbody.fpair { background: var(--sunk); }
+.ftable tbody.fpair > tr > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ftable tbody.fpair > tr:not(:last-child) > td { border-bottom: 1px dashed var(--line); }
+.ftable tbody.fpair > tr:first-child > td { border-top: 5px solid var(--panel); }
+.ftable tbody.fpair > tr:last-child > td { border-bottom: 5px solid var(--panel); }
+.ftable tr.beast-row > td:first-child { padding-left: 26px; position: relative; }
+.ftable .beast-mark { position: absolute; left: 9px; top: 12px; color: var(--muted); font-weight: 600; }
+.beast-owner { display: grid; gap: 2px; margin-top: 4px; font-size: .74rem; color: var(--muted); }
+.beast-owner select { height: 28px; font-size: .82rem; min-width: 0; width: 100%; }
+.ftable tbody.fstray .beast-owner select { border-color: var(--ooa); }
 .inj-list { display: flex; gap: 4px; flex-wrap: wrap; }
 
 /* rules */
@@ -1088,6 +1099,18 @@ let snapshotLocalLater = false;
 /* One-time roster additions for copies of the log kept in a browser. Each runs once (tracked in config.applied),
    adds only fighters that aren't there yet, and slots each one in after the fighter named in `after`. */
 const ROSTER_PATCHES = [
+  /* Beasts' owners were written in their notes ("Owned by Renascor", "Rides with Crew on Scout Trike…") (14 Nov 2026): set the owner.
+     A note that only said who owns it is cleared; a note with more in it is kept. */
+  { id: "2026-11-14-beast-owners", run() {
+    for (const g of Object.values(S.gangs)) for (const f of g.fighters || []) {
+      if (f.role !== "beast" || f.owner) continue;
+      const m = String(f.note || "").match(/^\s*(?:owned by|belongs to|rides with)\s+(.+?)(?:\s+on\s+.*)?\s*\.?\s*$/i); if (!m) continue;
+      const who = (g.fighters || []).find(o => o.id !== f.id && o.role !== "beast" && String(o.name).trim().toLowerCase() === m[1].trim().toLowerCase());
+      if (!who) continue;
+      f.owner = who.id;
+      if (/^\s*(?:owned by|belongs to)\s+[^,;]+?\s*\.?\s*$/i.test(f.note)) f.note = "";
+    }
+  } },
   /* Purchases logged before buying used the equipment database (14 Nov 2026): link each to its database item where the name fits
      (for that gang's Equipment List, or the Trading Post), using the database's name for it. What was paid is kept as logged. */
   { id: "2026-11-14-buy-items", run() {
@@ -1298,7 +1321,7 @@ function actDiff(kind, before, after, prefix = "") {
         const said = (x, f) => {
           /* A fighter's role and Specialist flag are one choice on the roster: report them as the role it shows. */
           if (k === "fighters" && (f.includes("role") || f.includes("specialist"))) f = [...f.filter(n => n !== "role" && n !== "specialist"), "role"];
-          return f.map(f => { const v = k === "fighters" && f === "role" ? roleLabel(x) : k === "fighters" && f === "status" ? statusLabel(x.status) : actVal(x[f]), lab = k === "fighters" && f === "type" ? "fighter type" : fieldLabel(f); return v ? `${lab} → ${v}` : lab; }).join(", ");
+          return f.map(f => { const v = k === "fighters" && f === "role" ? roleLabel(x) : k === "fighters" && f === "status" ? statusLabel(x.status) : k === "fighters" && f === "owner" ? (x.owner ? fname(x.owner) : "nobody") : actVal(x[f]), lab = k === "fighters" && f === "type" ? "fighter type" : k === "fighters" && f === "owner" ? "belongs to" : fieldLabel(f); return v ? `${lab} → ${v}` : lab; }).join(", ");
         };
         for (const [id, x] of bm) { const y = am.get(id); if (!y || stable(x) === stable(y)) continue;
           const f = fields(x, y);
@@ -4546,6 +4569,21 @@ document.addEventListener("change", ev => {
   const r = ft ? ft.role : roleVal((S.gangs[gid]?.fighters || []).find(f => baseType(f.type) === v));
   if (r && role && [...role.options].some(o => o.value === r)) role.value = r;
 });
+/* ---------- Beasts and pets belong to a fighter (f.owner = that fighter's id). On the roster each one is drawn straight under
+   its owner, joined to them as one tall row; for everything else (battles, XP, injuries) it is still its own fighter. */
+const isBeast = f => roleVal(f) === "beast";
+const canOwnBeast = f => f && !isBeast(f) && roleVal(f) !== "vehicle";  /* any fighter, crews included, but not a beast or a vehicle */
+function beastOwnerPicker(g, f) {
+  const owners = (g.fighters || []).filter(o => o.id !== f.id && canOwnBeast(o) && (!inGraveyard(o) || o.id === f.owner));
+  return `<label class="beast-owner"><span>Belongs to</span><select id="f-${f.id}-owner" data-bind="f.${g.id}.${f.id}.owner" aria-label="Which fighter this beast belongs to">
+    <option value=""${f.owner ? "" : " selected"}>Pick a fighter…</option>${owners.map(o => `<option value="${esc(o.id)}"${o.id === f.owner ? " selected" : ""}>${esc(o.name)}${inGraveyard(o) ? " (in the Graveyard)" : ""}</option>`).join("")}</select></label>`;
+}
+/* The roster in its order, each fighter followed by the beasts that belong to them; beasts with no owner on the roster come last. */
+function rosterGroups(list) {
+  const here = new Set(list.map(f => f.id)), owned = f => isBeast(f) && f.owner && here.has(f.owner) && f.owner !== f.id;
+  const groups = list.filter(f => !owned(f)).filter(f => !isBeast(f)).map(f => [f, list.filter(b => owned(b) && b.owner === f.id)]);
+  return [...groups, ...list.filter(f => isBeast(f) && !owned(f)).map(f => [f, []])];
+}
 /* In the Graveyard: fighters no longer in the gang's roster (dead, sold or retired), and anyone the injury tracking has as dead. */
 const inGraveyard = f => isGone(f) || f.status === "retired" || availability().now[f.id]?.s === "dead";
 /* The players' gangs (Gangs & fighters tab) or the NPC sides (NPCs tab): the gang's "NPC side" box decides which tab it's on. */
@@ -4565,9 +4603,9 @@ function renderGangs(npc) {
       const lasting = lastingList(f, k, false);
       if (f.status === "captured") lasting.push({ name: "Captured", kind: "info", src: f.note || "Currently captured" });
       const used = k.battles > 0 || refs.has(f.id);
-      return `<tr class="${isGone(f) ? "dead" : ""}">
-        <td><input type="text" id="f-${f.id}-name" data-bind="f.${g.id}.${f.id}.name" value="${esc(f.name)}" aria-label="Name">${(f.formerNames || []).length ? `<div class="muted" style="font-size:.76rem;margin-top:2px">Formerly ${f.formerNames.map(e => `${esc(e.name)} (until ${esc(fmtDate(e.until))})`).join(", ")}</div>` : ""}${f.type ? `<div class="muted" style="font-size:.76rem;margin-top:2px">${esc(f.type)}</div>` : ""}</td>
-        <td><select id="f-${f.id}-role" data-bind="f.${g.id}.${f.id}.role" aria-label="Role">${opts(ROLE_OPTS(), roleVal(f))}</select></td>
+      return `<tr class="${isGone(f) ? "dead" : ""}${isBeast(f) ? " beast-row" : ""}">
+        <td>${isBeast(f) ? `<span class="beast-mark" aria-hidden="true">↳</span>` : ""}<input type="text" id="f-${f.id}-name" data-bind="f.${g.id}.${f.id}.name" value="${esc(f.name)}" aria-label="Name">${(f.formerNames || []).length ? `<div class="muted" style="font-size:.76rem;margin-top:2px">Formerly ${f.formerNames.map(e => `${esc(e.name)} (until ${esc(fmtDate(e.until))})`).join(", ")}</div>` : ""}${f.type ? `<div class="muted" style="font-size:.76rem;margin-top:2px">${esc(f.type)}</div>` : ""}</td>
+        <td><select id="f-${f.id}-role" data-bind="f.${g.id}.${f.id}.role" aria-label="Role">${opts(ROLE_OPTS(), roleVal(f))}</select>${isBeast(f) ? beastOwnerPicker(g, f) : ""}</td>
         <td><select id="f-${f.id}-status" data-bind="f.${g.id}.${f.id}.status" aria-label="Status">${opts(STATUSES, f.status)}</select>${(() => { const x = availability().now[f.id]; return x && !isGone(f) ? `<div class="avail-tag" title="${esc(availText(x))}">${resultTag(availText(x, true), availKind(x))}</div>` : ""; })()}</td>
         <td class="num">${k.battles}</td>${mundaCells(f, k)}<td class="num">${k.ooa}</td><td class="num">${k.downed}</td>
         <td><div class="inj-list">${lasting.map(x => `<span class="tag ${x.kind}" title="${esc(x.src || fmtDate(x.date))}">${esc(x.name)}</span>`).join("") || `<span class="muted">–</span>`}</div></td>
@@ -4575,7 +4613,8 @@ function renderGangs(npc) {
         <td>${used ? "" : `<button class="ghost danger" data-act="delFighter" data-gang="${esc(g.id)}" data-id="${esc(f.id)}" aria-label="Remove fighter">✕</button>`}</td>
       </tr>`;
     };
-    const fs = g.fighters || [], trs = fs.filter(f => !inGraveyard(f)).map(row).join(""), dead = fs.filter(inGraveyard);
+    const fs = g.fighters || [], dead = fs.filter(inGraveyard);
+    const trs = rosterGroups(fs.filter(f => !inGraveyard(f))).map(([f, beasts]) => `<tbody class="fgroup${beasts.length ? " fpair" : ""}${isBeast(f) ? " fstray" : ""}">${row(f)}${beasts.map(row).join("")}</tbody>`).join("");
     const graveyard = `<section class="block graveyard"><h2 class="gt-title"><span aria-hidden="true">🪦</span>${esc(g.short || g.name)}: Graveyard${dead.length ? ` <span class="muted gy-n">${dead.length}</span>` : ""}</h2>
       ${dead.length ? `<div class="table-wrap"><table class="ftable">${thead}<tbody>${dead.map(row).join("")}</tbody></table></div>
         <p class="muted gy-note">Dead, sold and retired fighters. Change a fighter's status back to Active to return them to the roster.${dead.some(f => !isGone(f) && f.status !== "retired") ? " Fighters the injury tracking has as dead are here too: set their status to Dead." : ""}</p>`
@@ -4590,7 +4629,7 @@ function renderGangs(npc) {
       </div>
       <div class="muted" style="font-size:.82rem">${esc(g.type || "")}${heldBy(g.id).length ? ` · holds ${esc(heldBy(g.id).map(t => t.name).join(", "))}` : ""}${g.munda ? ` · Munda Manager: rating ${g.rating}, rep ${g.rep}, ${g.credits} credits · <a href="https://www.mundamanager.com/gang/${esc(g.munda)}" target="_blank" rel="noopener">Open gang</a>` : ""}</div>
       <div class="table-wrap"><table class="ftable">${thead}
-      <tbody>${trs}</tbody></table></div>
+      ${trs}</table></div>
       <div class="toolbar"><input type="text" id="add-${g.id}" aria-label="New fighter name" placeholder="New fighter name" data-enter="addFighter" data-gang="${esc(g.id)}" style="flex:0 1 220px">${fighterTypePicker(g)}<select id="addrole-${g.id}" aria-label="Role">${opts(ROLE_OPTS(), "ganger")}</select><button data-act="addFighter" data-gang="${esc(g.id)}">Add fighter</button></div>
     </section>
     ${g.npc && !dead.length ? "" : graveyard}
