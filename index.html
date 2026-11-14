@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114075201";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114080300";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -218,7 +218,8 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .tp-note { flex-basis: 100%; font-size: .8rem; padding-left: 74px; }
 .tp-qty { display: inline-flex; gap: 4px; align-items: center; }
 .tp-item { min-width: 0; max-width: 100%; }
-.tp-line input.tp-num { padding-left: 5px; padding-right: 2px; }
+.tp-line input.tp-num { padding: 0 4px; text-align: right; }
+.tp-line select.tp-shop { padding: 0 0 0 7px; font-weight: 600; }
 .tp-db { font-size: .8rem; white-space: nowrap; }
 .tp-pool { font-size: .85rem; }
 .gt { display: grid; gap: 2px; padding: 6px 0; border-top: 1px dashed var(--line); }
@@ -4042,23 +4043,26 @@ function pcActionBody(b, a, k) {
         const L = f => `pctl.${id}.${l.id}.${f}`, ip = `pctl-${id}-${l.id}`, c = lineCredits(l);
         const live = l.type === "recruit" ? recLive(l) : l, lock = live !== l ? ` disabled title="On the roster: edit this fighter on the Gangs &amp; fighters tab"` : "";
         const txt = (f, ph, w) => `<input type="text" id="${ip}-${f}" data-bind="${L(f)}" value="${esc(live[f])}" placeholder="${ph}" style="flex:${w}" aria-label="${ph}"${f === "name" || f === "ftype" ? lock : ""}>`;
-        const cr = (ph) => `<input type="number" min="0" max="999" class="mono tp-num" id="${ip}-credits" data-bind="${L("credits")}" value="${esc(l.credits)}" placeholder="${ph}" style="width:64px" aria-label="${ph}">`;
+        const cr = (ph) => `<input type="text" inputmode="numeric" maxlength="3" class="mono tp-num" id="${ip}-credits" data-bind="${L("credits")}" value="${esc(l.credits)}" placeholder="cr" style="width:46px" aria-label="${ph}">`;
         let mid = "", buyNote = "";
         if (l.type === "recruit") mid = `${txt("name", "Name", "1 1 120px")}${txt("ftype", "Fighter type", "1 1 140px")}<select id="${ip}-role" data-bind="${L("role")}" aria-label="Role" style="width:auto"${lock}>${opts(ROLE_OPTS(), live.role || "ganger")}</select>${cr("Cost")}
           ${l.added && FIDX[l.added] ? `<span class="tag ok">On the roster</span>` : `<button class="ghost" data-act="pcRecruit" data-id="${id}" data-line="${l.id}">Add to gang</button>`}`;
         else if (l.type === "buy") {
           /* 1. where from  2. the item, from the database (or Other…)  3. how many  4. the price: filled in from the database, can be changed */
-          const gid = pcGang(b)?.id, src = l.source || "list", os = buyOptions(gid, src), o = buyOption(gid, src, l.item), custom = !o;
+          const gid = pcGang(b)?.id, src = l.source ?? "list", os = src ? buyOptions(gid, src) : [], o = src ? buyOption(gid, src, l.item) : null, custom = !o;
           const groups = [...new Set(os.map(x => x.group))];
           const pick = `<select id="${ip}-item" class="tp-item" data-bind="${L("item")}" aria-label="Item" style="flex:1 1 210px">
-            <option value=""${!l.item && !l.name ? " selected" : ""}>${os.length ? "Pick an item…" : src === "list" ? "No Equipment List for this gang" : "Pick an item…"}</option>
+            <option value=""${!l.item && !l.name ? " selected" : ""}>${!src ? "Pick a shop first" : os.length ? "Pick an item…" : src === "list" ? "No Equipment List for this gang" : "Pick an item…"}</option>
             ${groups.map(gr => `<optgroup label="${esc(gr)}">${os.filter(x => x.group === gr).map(x => o && o.key === x.key ? `<option value="${esc(x.key)}" selected>${esc(x.label)}</option>`
               : `<option value="${esc(x.key)}">${esc(x.label)} – ${x.credits} cr${src === "tp" && String(x.tp) !== "" ? `, TP ${esc(String(x.tp))}` : ""}</option>`).join("")}</optgroup>`).join("")}
-            <option value="__custom"${custom && (l.item === "__custom" || l.name) ? " selected" : ""}>Other item (type it in)…</option></select>`;
+            ${src ? `<option value="__custom"${custom && (l.item === "__custom" || l.name) ? " selected" : ""}>Other item (type it in)…</option>` : ""}</select>`;
           const dbDiff = o && (String(num(l.credits)) !== String(o.credits) || (src === "tp" && String(l.tp ?? "").trim() !== String(o.tp ?? "")));
-          mid = `<select id="${ip}-source" data-bind="${L("source")}" aria-label="Bought from" style="width:auto">${opts([["list", "Equipment List"], ["tp", "Trading Post"]], src)}</select>
-          ${pick}${custom && (l.item === "__custom" || l.name) ? txt("name", "Item", "1 1 140px") : ""}
-          <span class="tp-qty"><input type="number" min="1" max="99" class="mono tp-num" id="${ip}-qty" data-bind="${L("qty")}" value="${esc(l.qty ?? 1)}" style="width:48px" aria-label="Amount"><span class="muted">×</span></span>
+          const shop = [["list", "Equipment List", "EL"], ["tp", "Trading Post", "TP"]];
+          mid = `<select id="${ip}-source" class="tp-shop" style="width:${src ? 62 : 84}px" data-bind="${L("source")}" aria-label="Shop: Equipment List or Trading Post" title="${src === "tp" ? "Trading Post" : src ? "Equipment List" : "Pick a shop"}">
+            ${src ? "" : `<option value="" selected disabled>Shop…</option>`}${shop.map(([v, full, short]) => `<option value="${v}"${v === src ? " selected" : ""}>${v === src ? short : full}</option>`).join("")}</select>`
+            .replace(/\n\s*/g, "") + `
+          ${pick.replace("<select ", src ? "<select " : "<select disabled ")}${custom && (l.item === "__custom" || l.name) ? txt("name", "Item", "1 1 140px") : ""}
+          <span class="tp-qty"><input type="text" inputmode="numeric" maxlength="2" class="mono tp-num" id="${ip}-qty" data-bind="${L("qty")}" value="${esc(l.qty ?? 1)}" style="width:34px" aria-label="Amount"><span class="muted">×</span></span>
           <span class="tp-qty" title="Credits each">${cr("Cost each")}<span class="muted">cr</span></span>
           ${src === "tp" ? `<input type="text" class="mono" id="${ip}-tp" data-bind="${L("tp")}" value="${esc(l.tp)}" placeholder="TP" maxlength="2" style="width:40px;text-align:center;padding:0 2px" aria-label="Trade Points each, or E for Exclusive" title="Trade Points each (E for Exclusive)"><span class="muted">TP</span>` : ""}
 `;
@@ -4977,7 +4981,7 @@ function setBound(el) {
       if (o) { l.item = o.key; l.name = o.label.replace(/ \((?:[^()]*only|maximum one per gang)\)$/, ""); l.credits = String(o.credits); l.tp = src === "tp" ? String(o.tp ?? "") : ""; }
       else if (parts[3] === "item") { if (val !== "__custom") { l.name = ""; l.credits = ""; l.tp = ""; } }
       else if (l.item && l.item !== "__custom") l.item = "__custom";  /* not sold there: keep it as a typed-in item */
-      setTimeout(() => $(`#pctl-${parts[1]}-${parts[2]}-${parts[3] === "item" && val === "__custom" ? "name" : "qty"}`)?.focus(), 0);
+      setTimeout(() => $(`#pctl-${parts[1]}-${parts[2]}-${parts[3] === "source" ? (l.item ? "qty" : "item") : val === "__custom" ? "name" : "qty"}`)?.focus(), 0);
     }
     touch(b);
     if (el.tagName === "SELECT") return "rerender";
@@ -5391,8 +5395,8 @@ function act(a, el) {
       delete S.territories[id]; save("territories", id); S.confirmTerr = null; render(); toast("Territory deleted"); return;
     case "pcLine": {
       const a = (b.actions || []).find(x => x.id === id); if (!a) return; a.lines ||= [];
-      const l = { id: uid("tl"), type: el.dataset.type, name: "", credits: "", tp: "", source: "list", role: "ganger", ftype: "", qty: 1, item: "" };
-      a.lines.push(l); touch(b); render(); $(`#pctl-${id}-${l.id}-${l.type === "buy" ? "item" : "name"}`)?.focus(); return;
+      const l = { id: uid("tl"), type: el.dataset.type, name: "", credits: "", tp: "", source: el.dataset.type === "buy" ? "" : "list", role: "ganger", ftype: "", qty: 1, item: "" };
+      a.lines.push(l); touch(b); render(); $(`#pctl-${id}-${l.id}-${l.type === "buy" ? "source" : "name"}`)?.focus(); return;
     }
     case "pcLinePrice": {  /* back to the database price */
       const a = (b.actions || []).find(x => x.id === id), l = a?.lines?.find(x => x.id === el.dataset.line), o = l && buyOption(pcGang(b)?.id, l.source || "list", l.item);
