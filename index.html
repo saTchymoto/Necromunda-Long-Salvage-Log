@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114080300";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114100723";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -216,6 +216,9 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .tp-line.tp-total { justify-content: flex-end; border-top-style: solid; }
 .tp-line input[type="text"] { min-width: 0; }
 .tp-note { flex-basis: 100%; font-size: .8rem; padding-left: 74px; }
+/* A purchase's price-change note starts under the Shop picker (after the 78px Buy tag and the gap), with a box for the reason. */
+.tp-note.tp-pnote { padding-left: calc(78px + var(--tp-gap, 10px)); display: grid; gap: 4px; }
+.tp-pnote input { width: 100%; max-width: 520px; height: 30px; font-size: .84rem; }
 .tp-qty { display: inline-flex; gap: 4px; align-items: center; }
 .tp-item { min-width: 0; max-width: 100%; }
 .tp-line input.tp-num { padding: 0 4px; text-align: right; }
@@ -3685,8 +3688,8 @@ function buyOptions(gid, source) {
       else add({ key: it.id, item: it.id, label: eqName(it), credits: tp.credits, tp: tp.tp, group });
       /* extra ammo bought for a weapon (warp rounds, photon flash and smoke grenades) */
       for (const m of it.modes || []) { const c = parseInt(String(m.credits).replace("+", ""), 10); if (c > 0) add({ key: it.id + "|mode:" + m.name, item: it.id, label: `${eqName(it)}: ${m.name}`, credits: c, tp: m.tp === "-" ? "" : m.tp, group }); }
-      /* options bought with an item (the sentry gun's weapon): the item's own Trade Points apply */
-      for (const v of it.variants || []) if (/^\+\d+$/.test(String(v.credits))) add({ key: it.id + "|opt:" + v.name, item: it.id, label: `${eqName(it)}: ${v.name}`, credits: parseInt(String(v.credits).slice(1), 10), tp: tp.credits !== undefined ? tp.tp : "", group });
+      /* options bought with an item (the sentry gun's weapon): credits only, the Trade Points are paid on the item itself */
+      for (const v of it.variants || []) if (/^\+\d+$/.test(String(v.credits))) add({ key: it.id + "|opt:" + v.name, item: it.id, label: `${eqName(it)}: ${v.name}`, credits: parseInt(String(v.credits).slice(1), 10), tp: "", group });
     }
   } else {
     const gl = gangHouse(gid);
@@ -3742,7 +3745,7 @@ function lineText(l) {
   if (l.type === "recruit") { const r = recLive(l); return `${r.name || "New recruit"}${r.ftype ? " (" + r.ftype + ")" : ""}, ${c} credits`; }
   if (l.type === "sell") return `${l.name || "Item"}${String(l.credits ?? "").trim() ? ` (worth ${num(l.credits)})` : ""}, +${c} credits`;
   const q = lineQty(l);
-  return `${q !== 1 ? q + "× " : ""}${l.name || "Item"} (${l.source === "tp" ? `Trading Post, ${isExclusive(l) ? "Exclusive" : wholeNum(l.tp) * q + " TP"}` : "Equipment List"}), ${c} credits`;
+  return `${q !== 1 ? q + "× " : ""}${l.name || "Item"} (${l.source === "tp" ? `Trading Post, ${isExclusive(l) ? "Exclusive" : wholeNum(l.tp) * q + " TP"}` : "Equipment List"}), ${c} credits${String(l.priceNote || "").trim() ? ` – price changed: ${String(l.priceNote).trim()}` : ""}`;
 }
 function tradeSummary(a) {
   const ls = [...(a.lines || [])].sort((x, y) => TP_ORDER[x.type] - TP_ORDER[y.type]), P = [];
@@ -4066,7 +4069,8 @@ function pcActionBody(b, a, k) {
           <span class="tp-qty" title="Credits each">${cr("Cost each")}<span class="muted">cr</span></span>
           ${src === "tp" ? `<input type="text" class="mono" id="${ip}-tp" data-bind="${L("tp")}" value="${esc(l.tp)}" placeholder="TP" maxlength="2" style="width:40px;text-align:center;padding:0 2px" aria-label="Trade Points each, or E for Exclusive" title="Trade Points each (E for Exclusive)"><span class="muted">TP</span>` : ""}
 `;
-          if (dbDiff) buyNote = `<div class="muted tp-note">Price changed by hand. Database price: ${o.credits} credits${src === "tp" ? `, ${esc(String(o.tp))} TP` : ""} each. <button class="linkish" data-act="pcLinePrice" data-id="${id}" data-line="${l.id}">Use the database price</button></div>`;
+          if (dbDiff) buyNote = `<div class="tp-note tp-pnote"><span class="muted">Price changed by hand. Database price: ${o.credits} credits${src === "tp" ? `, ${esc(String(o.tp))} TP` : ""} each. <button class="linkish" data-act="pcLinePrice" data-id="${id}" data-line="${l.id}">Use the database price</button></span>
+            <input type="text" id="${ip}-priceNote" data-bind="${L("priceNote")}" value="${esc(l.priceNote || "")}" placeholder="Why the price changed (e.g. Tech Bazaar discount)" aria-label="Reason for the price change"></div>`;
         }
         else mid = `${txt("name", "Item from the Stash", "1 1 160px")}${cr("Value")}<span class="muted">half, rounded up, min 5</span>`;
         return `<div class="pca-line tp-line"><span class="tag ${TP_LINES[l.type][1]} tp-kind">${TP_LINES[l.type][0]}</span>${mid}
@@ -5400,7 +5404,7 @@ function act(a, el) {
     }
     case "pcLinePrice": {  /* back to the database price */
       const a = (b.actions || []).find(x => x.id === id), l = a?.lines?.find(x => x.id === el.dataset.line), o = l && buyOption(pcGang(b)?.id, l.source || "list", l.item);
-      if (o) { l.credits = String(o.credits); if ((l.source || "list") === "tp") l.tp = String(o.tp ?? ""); touch(b); render(); } return;
+      if (o) { l.credits = String(o.credits); if ((l.source || "list") === "tp") l.tp = String(o.tp ?? ""); l.priceNote = ""; touch(b); render(); } return;
     }
     case "pcLineDel": { const a = (b.actions || []).find(x => x.id === id); if (a) { a.lines = (a.lines || []).filter(x => x.id !== el.dataset.line); touch(b); render(); } return; }
     case "pcRecruit": {
