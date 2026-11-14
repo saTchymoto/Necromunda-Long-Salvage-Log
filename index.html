@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114100723";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114101253";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -212,7 +212,9 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .tp-line { padding: 5px 34px 5px 0; border-top: 1px dashed var(--line); position: relative; }
 .tp-line > .tp-del { position: absolute; right: 0; top: 5px; }
 .tp-kind { width: 78px; justify-content: center; flex: none; }
-.tp-cred { min-width: 84px; justify-content: center; }
+/* Credit tags on Visit Trading Post lines: wide enough for "-999 cr", so the totals still line up in a column. */
+.tp-cred { min-width: 64px; justify-content: center; }
+:is(.pca-line, .res-line) > .tag.tp-cred { padding-inline: 5px; }
 .tp-line.tp-total { justify-content: flex-end; border-top-style: solid; }
 .tp-line input[type="text"] { min-width: 0; }
 .tp-note { flex-basis: 100%; font-size: .8rem; padding-left: 74px; }
