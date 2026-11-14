@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114074030";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114074655";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3683,8 +3683,8 @@ function buyOptions(gid, source) {
       else add({ key: it.id, item: it.id, label: eqName(it), credits: tp.credits, tp: tp.tp, group });
       /* extra ammo bought for a weapon (warp rounds, photon flash and smoke grenades) */
       for (const m of it.modes || []) { const c = parseInt(String(m.credits).replace("+", ""), 10); if (c > 0) add({ key: it.id + "|mode:" + m.name, item: it.id, label: `${eqName(it)}: ${m.name}`, credits: c, tp: m.tp === "-" ? "" : m.tp, group }); }
-      /* options bought with an item (the sentry gun's weapon) */
-      for (const v of it.variants || []) if (/^\+\d+$/.test(String(v.credits))) add({ key: it.id + "|opt:" + v.name, item: it.id, label: `${eqName(it)}: ${v.name}`, credits: parseInt(String(v.credits).slice(1), 10), tp: "", group });
+      /* options bought with an item (the sentry gun's weapon): the item's own Trade Points apply */
+      for (const v of it.variants || []) if (/^\+\d+$/.test(String(v.credits))) add({ key: it.id + "|opt:" + v.name, item: it.id, label: `${eqName(it)}: ${v.name}`, credits: parseInt(String(v.credits).slice(1), 10), tp: tp.credits !== undefined ? tp.tp : "", group });
     }
   } else {
     const gl = gangHouse(gid);
