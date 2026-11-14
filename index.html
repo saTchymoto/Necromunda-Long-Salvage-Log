@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261113192654";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114074030";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -217,6 +217,8 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .tp-line input[type="text"] { min-width: 0; }
 .tp-note { flex-basis: 100%; font-size: .8rem; padding-left: 74px; }
 .tp-qty { display: inline-flex; gap: 4px; align-items: center; }
+.tp-item { min-width: 0; max-width: 100%; }
+.tp-db { font-size: .8rem; white-space: nowrap; }
 .tp-pool { font-size: .85rem; }
 .gt { display: grid; gap: 2px; padding: 6px 0; border-top: 1px dashed var(--line); }
 .gt-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
@@ -1079,6 +1081,16 @@ let snapshotLocalLater = false;
 /* One-time roster additions for copies of the log kept in a browser. Each runs once (tracked in config.applied),
    adds only fighters that aren't there yet, and slots each one in after the fighter named in `after`. */
 const ROSTER_PATCHES = [
+  /* Purchases logged before buying used the equipment database (14 Nov 2026): link each to its database item where the name fits
+     (for that gang's Equipment List, or the Trading Post), using the database's name for it. What was paid is kept as logged. */
+  { id: "2026-11-14-buy-items", run() {
+    for (const b of Object.values(S.battles)) if (isPC(b)) for (const [gid, sh] of Object.entries(b.sheets || {})) for (const a of sh?.actions || []) for (const l of a.lines || []) {
+      if (l.type !== "buy" || l.item) continue;
+      const o = matchBuy(l.name, gid, l.source || "list");
+      if (o) { l.item = o.key; l.name = o.label.replace(/ \((?:[^()]*only|maximum one per gang)\)$/, ""); if (l.qty == null || l.qty === "") l.qty = 1; }
+      else if (l.name) l.item = "__custom";
+    }
+  } },
   /* "Open gang" links go to the gangs made for the current rules on Munda Manager (11 Nov 2026), not the old-rules gangs. */
   { id: "2026-11-11-munda-links", run() {
     const ids = { gsc: "865d2b2d-e41e-4901-9d60-f3e1c2660407", delaque: "db08ff63-1b82-4fb4-a75f-1425c87f0564", fangs: "db75a26a-9f29-4968-9f0a-097f59aa68ec", kyn: "d13d57db-a9ab-4268-bad6-5a706e3641d6" };
@@ -1222,7 +1234,7 @@ const ACT_LABEL = { date: "date", scenario: "scenario", kind: "battle type", loc
   credits: "credits", rep: "Rep", rating: "rating", wealth: "wealth", name: "name", short: "short name", player: "player", color: "colour", tactics: "gang tactics", type: "type", status: "status",
   role: "role", note: "note", xp: "XP", mundaXp: "Munda XP", mundaDate: "Munda date", injuries: "injuries", owner: "holder", income: "income", boon: "boon", effect: "special rule text",
   effectName: "special rule", repNow: "Rep this cycle", sheets: "post-cycle", territories: "territories", cycle: "cycle", events: "XP log", rewards: "rewards", actions: "actions", fighters: "fighters" };
-const ACT_SKIP = new Set(["updated", "id", "listOrder", "claimPick", "stakeOwner", "order", "rosterSynced", "applied", "done", "seeded", "lines", "crew"]);
+const ACT_SKIP = new Set(["item", "updated", "id", "listOrder", "claimPick", "stakeOwner", "order", "rosterSynced", "applied", "done", "seeded", "lines", "crew"]);
 const fieldLabel = k => ACT_LABEL[k] || String(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
 function actVal(v) {
   if (v === undefined || v === null || v === "") return "nothing";
@@ -3653,6 +3665,58 @@ function pcCredits(a) {
   }
   return 0;
 }
+/* ---------- Buying equipment, from the Equipment Lists & Trading Post database ----------
+   A purchase line picks an item from what the gang can buy where it's buying: its own Equipment List (that list's price, no Trade
+   Points), or the Trading Post (credits and Trade Points). Picking it fills in the database price; the price can then be changed by
+   hand, and the line shows the database price beside it while they differ. l.item is the option's key: the catalogue id, plus
+   "|version" for an item sold in versions (carapace armour), "|mode:…" for extra ammo, or "|opt:…" for an option of another item. */
+const BUY_PART = { ranged: "Ranged Weapons", close: "Close Combat Weapons", wargear: "Wargear" };
+const BUY_CACHE = {};
+function buyOptions(gid, source) {
+  const ck = gid + "/" + source; if (BUY_CACHE[ck]) return BUY_CACHE[ck];
+  const out = [], seen = new Set(), add = o => { if (!seen.has(o.key)) { seen.add(o.key); out.push(o); } };
+  if (source === "tp") {
+    for (const sec of EQUIPMENT.tradingPost) for (const g of sec.groups) for (const id of g.items) {
+      const it = eqItem(id); if (!it || it.optionOf || !it.tradingPost) continue;
+      const group = sec.title + (g.title && g.title !== "Core Trading Post" ? ": " + g.title : ""), tp = it.tradingPost;
+      if (tp.variants) for (const v of tp.variants) add({ key: it.id + "|" + v.name, item: it.id, label: `${eqName(it)} (${v.name})`, credits: v.credits, tp: v.tp, group });
+      else add({ key: it.id, item: it.id, label: eqName(it), credits: tp.credits, tp: tp.tp, group });
+      /* extra ammo bought for a weapon (warp rounds, photon flash and smoke grenades) */
+      for (const m of it.modes || []) { const c = parseInt(String(m.credits).replace("+", ""), 10); if (c > 0) add({ key: it.id + "|mode:" + m.name, item: it.id, label: `${eqName(it)}: ${m.name}`, credits: c, tp: m.tp === "-" ? "" : m.tp, group }); }
+      /* options bought with an item (the sentry gun's weapon) */
+      for (const v of it.variants || []) if (/^\+\d+$/.test(String(v.credits))) add({ key: it.id + "|opt:" + v.name, item: it.id, label: `${eqName(it)}: ${v.name}`, credits: parseInt(String(v.credits).slice(1), 10), tp: "", group });
+    }
+  } else {
+    const gl = gangHouse(gid);
+    for (const [part, title] of Object.entries(BUY_PART)) for (const g of gl?.list?.[part] || []) for (const e of g.entries) {
+      const it = eqItem(e.item); if (!it) continue;
+      add({ key: e.item + (e.variant ? "|" + e.variant : ""), item: e.item, label: (e.label || eqName(it)) + (e.restriction ? ` (${e.restriction})` : ""), credits: e.credits, tp: "", group: `${title}: ${g.title}` });
+    }
+  }
+  return (BUY_CACHE[ck] = out);
+}
+const buyOption = (gid, source, key) => key ? buyOptions(gid, source || "list").find(o => o.key === key) || null : null;
+/* The same item bought somewhere else: keep the version/ammo/option if that place sells it, otherwise the plain item. */
+function buyRekey(gid, source, key) {
+  if (!key || key === "__custom") return null; const os = buyOptions(gid, source), base = key.split("|")[0];
+  return os.find(o => o.key === key) || os.find(o => o.key === base) || os.find(o => o.item === base) || null;
+}
+/* Linking a name typed before the database existed ("Radcannon", "Seismic Canon", "Photon-flash grenade") to the database item:
+   letters and digits only, ignoring a plural s, then allowing one typo. Only when exactly one item fits. */
+const buyKey = n => String(n || "").toLowerCase().replace(/\*/g, "").replace(/\(.*?\)/g, "").replace(/ with .*$/, "").replace(/[^a-z0-9]/g, "").replace(/s$/, "");
+function editDist1(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return false; let i = 0, j = 0, d = 0;
+  while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; continue; } if (++d > 1) return false; if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; } }
+  return d + (a.length - i) + (b.length - j) <= 1;
+}
+function matchBuy(name, gid, source) {
+  const k = buyKey(name); if (!k) return null;
+  const os = buyOptions(gid, source || "list"), keyOf = o => [buyKey(o.label), buyKey(eqName(eqItem(o.item)))];
+  const exact = os.filter(o => keyOf(o).includes(k));
+  if (exact.length) return exact.find(o => o.key === o.item) || exact[0];
+  const near = os.filter(o => k.length >= 6 && keyOf(o).some(x => editDist1(x, k)));
+  return near.length === 1 || (near.length && near.every(o => o.item === near[0].item)) ? near.find(o => o.key === o.item) || near[0] : null;
+}
 /* Visit the Trading Post (sub-step B): recruit, purchase, sell. Lines live on the trade action; Trade Points pool across the gang's visits. */
 const TP_LINES = { recruit: ["Recruit", "info"], buy: ["Buy", "si"], sell: ["Sell", "ok"] };
 const TP_ORDER = { recruit: 0, buy: 1, sell: 2 };
@@ -3978,16 +4042,31 @@ function pcActionBody(b, a, k) {
         const live = l.type === "recruit" ? recLive(l) : l, lock = live !== l ? ` disabled title="On the roster: edit this fighter on the Gangs &amp; fighters tab"` : "";
         const txt = (f, ph, w) => `<input type="text" id="${ip}-${f}" data-bind="${L(f)}" value="${esc(live[f])}" placeholder="${ph}" style="flex:${w}" aria-label="${ph}"${f === "name" || f === "ftype" ? lock : ""}>`;
         const cr = (ph) => `<input type="number" min="0" class="mono" id="${ip}-credits" data-bind="${L("credits")}" value="${esc(l.credits)}" placeholder="${ph}" style="width:84px" aria-label="${ph}">`;
-        let mid = "";
+        let mid = "", buyNote = "";
         if (l.type === "recruit") mid = `${txt("name", "Name", "1 1 120px")}${txt("ftype", "Fighter type", "1 1 140px")}<select id="${ip}-role" data-bind="${L("role")}" aria-label="Role" style="width:auto"${lock}>${opts(ROLE_OPTS(), live.role || "ganger")}</select>${cr("Cost")}
           ${l.added && FIDX[l.added] ? `<span class="tag ok">On the roster</span>` : `<button class="ghost" data-act="pcRecruit" data-id="${id}" data-line="${l.id}">Add to gang</button>`}`;
-        else if (l.type === "buy") mid = `<select id="${ip}-source" data-bind="${L("source")}" aria-label="Bought from" style="width:auto">${opts([["list", "Equipment List"], ["tp", "Trading Post"]], l.source || "list")}</select>
-          <span class="tp-qty"><input type="number" min="1" class="mono" id="${ip}-qty" data-bind="${L("qty")}" value="${esc(l.qty ?? 1)}" style="width:54px" aria-label="Amount"><span class="muted">×</span></span>${txt("name", "Item", "1 1 140px")}<span class="tp-qty">${cr("Cost each")}<span class="muted">cr each</span></span>
-          ${l.source === "tp" ? `<input type="text" class="mono" id="${ip}-tp" data-bind="${L("tp")}" value="${esc(l.tp)}" placeholder="TP" maxlength="2" style="width:52px" aria-label="Trade Points each, or E for Exclusive"><span class="muted">TP each</span>` : ""}`;
+        else if (l.type === "buy") {
+          /* 1. where from  2. the item, from the database (or Other…)  3. how many  4. the price: filled in from the database, can be changed */
+          const gid = pcGang(b)?.id, src = l.source || "list", os = buyOptions(gid, src), o = buyOption(gid, src, l.item), custom = !o;
+          const groups = [...new Set(os.map(x => x.group))];
+          const pick = `<select id="${ip}-item" class="tp-item" data-bind="${L("item")}" aria-label="Item" style="flex:1 1 200px">
+            <option value=""${!l.item && !l.name ? " selected" : ""}>${os.length ? "Pick an item…" : src === "list" ? "No Equipment List for this gang" : "Pick an item…"}</option>
+            ${groups.map(gr => `<optgroup label="${esc(gr)}">${os.filter(x => x.group === gr).map(x => `<option value="${esc(x.key)}"${o && o.key === x.key ? " selected" : ""}>${esc(x.label)} – ${x.credits} cr${src === "tp" && String(x.tp) !== "" ? `, TP ${esc(String(x.tp))}` : ""}</option>`).join("")}</optgroup>`).join("")}
+            <option value="__custom"${custom && (l.item === "__custom" || l.name) ? " selected" : ""}>Other item (type it in)…</option></select>`;
+          const dbDiff = o && (String(num(l.credits)) !== String(o.credits) || (src === "tp" && String(l.tp ?? "").trim() !== String(o.tp ?? "")));
+          mid = `<select id="${ip}-source" data-bind="${L("source")}" aria-label="Bought from" style="width:auto">${opts([["list", "Equipment List"], ["tp", "Trading Post"]], src)}</select>
+          ${pick}${custom && (l.item === "__custom" || l.name) ? txt("name", "Item", "1 1 140px") : ""}
+          <span class="tp-qty"><input type="number" min="1" class="mono" id="${ip}-qty" data-bind="${L("qty")}" value="${esc(l.qty ?? 1)}" style="width:54px" aria-label="Amount"><span class="muted">×</span></span>
+          <span class="tp-qty">${cr("Cost each")}<span class="muted">cr each</span></span>
+          ${src === "tp" ? `<input type="text" class="mono" id="${ip}-tp" data-bind="${L("tp")}" value="${esc(l.tp)}" placeholder="TP" maxlength="2" style="width:52px" aria-label="Trade Points each, or E for Exclusive"><span class="muted">TP each</span>` : ""}
+`;
+          if (dbDiff) buyNote = `<div class="muted tp-note">Price changed by hand. Database price: ${o.credits} credits${src === "tp" ? `, ${esc(String(o.tp))} TP` : ""} each. <button class="linkish" data-act="pcLinePrice" data-id="${id}" data-line="${l.id}">Use the database price</button></div>`;
+        }
         else mid = `${txt("name", "Item from the Stash", "1 1 160px")}${cr("Value")}<span class="muted">half, rounded up, min 5</span>`;
         return `<div class="pca-line tp-line"><span class="tag ${TP_LINES[l.type][1]} tp-kind">${TP_LINES[l.type][0]}</span>${mid}
           ${c ? `<span class="tag tp-cred ${c > 0 ? "ok" : "ooa"}">${credTxt(c)}</span>` : ""}<button class="ghost danger tp-del" data-act="pcLineDel" data-id="${id}" data-line="${l.id}" aria-label="Remove line">✕</button>
           ${l.type === "recruit" && (l.role === "leader" || l.role === "champion") ? `<div class="muted tp-note">A new ${l.role === "leader" ? "Leader generates 2 Gang Tactics" : "Champion generates 1 Gang Tactic"}: roll ${l.role === "leader" ? "them" : "it"} under Gang Tactics on the Gangs &amp; fighters tab.</div>` : ""}
+          ${buyNote}
           ${l.type === "buy" && l.source === "tp" && isExclusive(l) ? `<div class="muted tp-note">Exclusive (TP E): only if it appears on a model's Equipment List. No Trade Points spent.</div>` : ""}</div>`;
       }).join("");
       const legacy = String(a.spent ?? "").trim() || String(a.sold ?? "").trim() ? `<div class="pca-line"><span>Spent</span>${numIn("spent", "0")}<span>Sold for</span>${numIn("sold", "0")}<span class="muted">credits (logged before itemised lines)</span></div>` : "";
@@ -4890,6 +4969,14 @@ function setBound(el) {
   if (scope === "pctl") {
     const a = (b.actions || []).find(x => x.id === parts[1]); const l = a?.lines?.find(x => x.id === parts[2]); if (!l) return;
     l[parts[3]] = val; if (parts[3] === "source" && val !== "tp") l.tp = "";
+    if (l.type === "buy" && (parts[3] === "item" || parts[3] === "source")) {
+      const gid = pcGang(b)?.id, src = l.source || "list";
+      const o = parts[3] === "item" ? buyOption(gid, src, val) : buyRekey(gid, src, l.item);
+      if (o) { l.item = o.key; l.name = o.label.replace(/ \((?:[^()]*only|maximum one per gang)\)$/, ""); l.credits = String(o.credits); l.tp = src === "tp" ? String(o.tp ?? "") : ""; }
+      else if (parts[3] === "item") { if (val !== "__custom") { l.name = ""; l.credits = ""; l.tp = ""; } }
+      else if (l.item && l.item !== "__custom") l.item = "__custom";  /* not sold there: keep it as a typed-in item */
+      setTimeout(() => $(`#pctl-${parts[1]}-${parts[2]}-${parts[3] === "item" && val === "__custom" ? "name" : "qty"}`)?.focus(), 0);
+    }
     touch(b);
     if (el.tagName === "SELECT") return "rerender";
     return ["credits", "tp", "qty"].includes(parts[3]) ? "rerender-soft" : "summary";
@@ -5302,8 +5389,12 @@ function act(a, el) {
       delete S.territories[id]; save("territories", id); S.confirmTerr = null; render(); toast("Territory deleted"); return;
     case "pcLine": {
       const a = (b.actions || []).find(x => x.id === id); if (!a) return; a.lines ||= [];
-      const l = { id: uid("tl"), type: el.dataset.type, name: "", credits: "", tp: "", source: "list", role: "ganger", ftype: "", qty: 1 };
-      a.lines.push(l); touch(b); render(); $(`#pctl-${id}-${l.id}-${l.type === "buy" ? "source" : "name"}`)?.focus(); return;
+      const l = { id: uid("tl"), type: el.dataset.type, name: "", credits: "", tp: "", source: "list", role: "ganger", ftype: "", qty: 1, item: "" };
+      a.lines.push(l); touch(b); render(); $(`#pctl-${id}-${l.id}-${l.type === "buy" ? "item" : "name"}`)?.focus(); return;
+    }
+    case "pcLinePrice": {  /* back to the database price */
+      const a = (b.actions || []).find(x => x.id === id), l = a?.lines?.find(x => x.id === el.dataset.line), o = l && buyOption(pcGang(b)?.id, l.source || "list", l.item);
+      if (o) { l.credits = String(o.credits); if ((l.source || "list") === "tp") l.tp = String(o.tp ?? ""); touch(b); render(); } return;
     }
     case "pcLineDel": { const a = (b.actions || []).find(x => x.id === id); if (a) { a.lines = (a.lines || []).filter(x => x.id !== el.dataset.line); touch(b); render(); } return; }
     case "pcRecruit": {
@@ -5686,7 +5777,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-13";
+const APP_BUILD = "2026-11-14";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
