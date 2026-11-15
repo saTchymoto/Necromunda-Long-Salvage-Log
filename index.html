@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261114222616";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261115211343";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -4865,6 +4865,15 @@ function renderRules() {
         <li>New Gangers, Hangers-on and Brutes can only be recruited with a Visit the Trading Post post-cycle action.</li>
         <li>This includes fighters gained through Territory Boons.</li>
       </ol>
+      <h3>7. Gang-specific territory bonuses</h3>
+      ${(() => { const who = (gid, house) => `<strong>${house}</strong>${S.gangs[gid] ? ` (${gdot(S.gangs[gid])} ${esc(S.gangs[gid].name)})` : ""}`;
+        return `<ol start="13">
+        <li>Every Dig Site (Delta, Omega and REDACTED) has secret properties that are only revealed when a gang takes it over.</li>
+        <li>For ${who("gsc", "Genestealer Cults")}, Mess Shack has further properties, not yet revealed, on top of its normal rules.</li>
+        <li>If ${who("kyn", "Ironhead Squats")} ever hold both Mine Workings and Tunnels at the same time, they unlock a bonus that is not yet revealed.</li>
+        <li>If ${who("delaque", "House Delaque")} ever hold two Dig Sites at the same time, they gain a bonus that is not yet revealed.</li>
+        <li>If ${who("fangs", "House Van Saar")} ever hold both a Dig Site and Generatorium at the same time, they unlock a bonus that is not yet revealed.</li>
+      </ol>`; })()}
     </section>`;
   return `<div class="toolbar rules-top"><label class="check">Show <select id="rules-pick" aria-label="Which rules to show"><option value="">All rules</option></select></label></div>
   <div class="rules">
@@ -5828,7 +5837,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-14";
+const APP_BUILD = "2026-11-15";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
