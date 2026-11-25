@@ -5,9 +5,10 @@ service cloud.firestore {
     function isPlayer() {
       return request.auth != null
         && request.auth.token.email_verified == true
+        // Write every address in lower case: the signed-in address is lower-cased before it is compared.
         && request.auth.token.email.lower() in [
-          'PLAYER1@gmail.com',
-          'PLAYER2@gmail.com'
+          'player1@gmail.com',
+          'player2@gmail.com'
         ];
     }
     // The log itself and the daily restore points.
