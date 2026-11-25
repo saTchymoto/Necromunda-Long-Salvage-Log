@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261115211343";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261125212948";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -461,7 +461,8 @@ section.block { background: var(--panel); border: 1px solid var(--line); border-
 .inj { display: grid; grid-template-columns: minmax(0,1.1fr) 150px minmax(0,1.6fr) 30px; gap: 8px 10px; align-items: start; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
 .dice { display: flex; gap: 4px; align-items: center; }
 .dice input { width: 58px; font-family: var(--font-mono); font-size: 1.05rem; text-align: center; letter-spacing: .1em; }
-.res { display: grid; gap: 5px; min-width: 0; }
+.res { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; min-width: 0; }
+.res select, .res textarea, .res input:not([type=checkbox]) { max-width: 100%; }
 .res .effect { font-size: .85rem; color: var(--muted); }
 .res .extra { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: .82rem; }
 .res .extra input { width: 70px; }
@@ -941,6 +942,8 @@ const isLesson = n => n === "Lesson Learned" || n === "Lesson Learnt";
 const S = { gangs: {}, battles: {}, territories: {}, config: {}, tab: "battles", sel: null, loaded: false, mode: "none" };
 let db = null;
 const dirty = {}, timers = {}, chains = {}, lastKnown = {};
+/* What this browser last sent for each record (stable form), so the database echoing our own save back is not mistaken for someone else's edit. */
+const sentStable = {};
 const LS_KEY = "long-salvage-log-v1";
 const STANDALONE = !(window.claude && typeof window.claude.use === "function");
 
@@ -1336,6 +1339,19 @@ function actDiff(kind, before, after, prefix = "") {
             }
             for (const [cid, o] of oc) if (!nc.has(cid) && o.fighter) out.push([key + "~" + id + "-" + cid, `took ${fname(o.fighter)} off ${name}`]);
           }
+          /* Visit the Trading Post: what was bought, sold or recruited, at what price. A line counts once it has a name. */
+          if (k === "actions" && stable(x.lines) !== stable(y.lines)) {
+            const who = actItem(k, x), has = l => !!String(l?.name || "").trim(), om = new Map((y.lines || []).map(l => [l.id, l]));
+            const VERB = { buy: "bought", sell: "sold", recruit: "recruited" }, NOUN = { buy: "purchase", sell: "sale", recruit: "recruit" };
+            for (const l of x.lines || []) { const o = om.get(l.id);
+              if (!has(l)) { if (has(o)) out.push([key + "~" + id + "-L" + l.id, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]); continue; }
+              const added = `${who}: ${VERB[l.type] || "added"} ${lineText(l)}`;
+              if (!has(o)) { out.push([key + "~" + id + "+L" + l.id, added]); continue; }
+              const was = lineText(o), now = lineText(l);
+              if (was !== now) out.push([key + "~" + id + "~L" + l.id, `${who}: ${NOUN[l.type] || "line"} changed to ${now} (was ${was})`, added]);
+            }
+            for (const [lid, o] of om) if (has(o) && !(x.lines || []).some(l => l.id === lid)) out.push([key + "~" + id + "-L" + lid, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]);
+          }
         }
         continue;
       }
@@ -1375,7 +1391,13 @@ function logActivity(kind, id, before, after, why) {
   }
   let buf = actBuf[key];
   if (!buf || now - buf.t > ACT_JOIN_MS) buf = actBuf[key] = { doc: `${new Date(now).toISOString().replace(/[:.]/g, "-")}-${Math.random().toString(36).slice(2, 7)}`, start: new Date(now).toISOString(), lines: new Map() };
-  buf.t = now; for (const [k, t] of lines) { buf.lines.delete(k); buf.lines.set(k, t); }
+  buf.t = now;
+  for (const [k, t, asAdded] of lines) {
+    /* Still the same purchase (added earlier in this entry): update that sentence instead of adding "changed …". */
+    const addK = asAdded && k.replace("~L", "+L"); if (addK && buf.lines.has(addK)) { buf.lines.set(addK, asAdded); continue; }
+    if (k.includes("-L")) { const a = k.replace("-L", "+L"); buf.lines.delete(k.replace("-L", "~L")); if (buf.lines.has(a)) { buf.lines.delete(a); continue; } }
+    buf.lines.delete(k); buf.lines.set(k, t);
+  }
   const all = [...buf.lines.values()];
   const rec = why ? { at: buf.start, last: new Date(now).toISOString(), ...who, kind: "bulk", rid: "", title: why,
       lines: [`${all.length} record${all.length === 1 ? "" : "s"}: ${all.slice(0, 40).join(", ")}${all.length > 40 ? ", …" : ""}`] }
@@ -1601,22 +1623,31 @@ function flush(path) {
        so two people saving the same record at the same moment both keep their changes. */
     if (HOSTED && obj && typeof db.runTransaction === "function") {
       try {
-        let merged = null; const lk0 = lastKnown[path];
+        let merged = null, mine = null; const lk0 = lastKnown[path];
         await db.runTransaction(async t => {
-          const snap = await t.get(ref), remote = snap.exists ? snap.data() : null, mine = JSON.parse(JSON.stringify(S[kind][id] || obj));
+          const snap = await t.get(ref), remote = snap.exists ? snap.data() : null; mine = JSON.parse(JSON.stringify(S[kind][id] || obj));
           merged = remote && lastKnown[path] ? merge3(JSON.parse(lastKnown[path]), mine, remote) : mine;
+          sentStable[path] = stable(merged);
           t.set(ref, merged);
         });
-        /* If a newer version arrived from the database while we were saving, it has already been merged in: leave it. */
-        if (lastKnown[path] !== lk0) return;
-        const json = JSON.stringify(merged); lastKnown[path] = json;
-        if (S[kind][id] && stable(S[kind][id]) !== stable({ ...merged, id })) { S[kind][id] = { ...JSON.parse(json), id }; if (kind === "gangs") reindex(); after("rerender-soft"); }
+        /* If a different, newer version arrived from the database while we were saving, it has already been merged in: leave it. */
+        const now = lastKnown[path];
+        if (now !== lk0 && (!now || stable(JSON.parse(now)) !== sentStable[path])) return;
+        /* Take in only what the other side changed (what the merge added to what we sent). Anything typed here while the save
+           was on its way stays as it is and goes out with the next save. */
+        lastKnown[path] = JSON.stringify(mine);
+        const took = S[kind][id] ? mergeRemote(kind, id, path, merged) : false;
+        lastKnown[path] = JSON.stringify(merged);
+        if (took) { if (kind === "gangs") reindex(); after("rerender-soft"); }
         return;
       } catch (e) { if (!["unavailable", "failed-precondition", "aborted"].includes(e?.code)) throw e; /* offline: plain save below */ }
     }
-    const attempt = () => obj ? ref.set(JSON.parse(JSON.stringify(obj))) : ref.delete();
+    /* Remember exactly what was sent, not the record as it is when the save comes back: it may have been typed into since. */
+    const sent = obj ? JSON.stringify(obj) : null;
+    if (sent) sentStable[path] = stable(JSON.parse(sent)); else delete sentStable[path];
+    const attempt = () => sent ? ref.set(JSON.parse(sent)) : ref.delete();
     try { await attempt(); } catch (e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 600)); await attempt(); } else throw e; }
-    lastKnown[path] = obj ? JSON.stringify(obj) : null;
+    lastKnown[path] = sent;
   };
   chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
     if (!timers[path]) dirty[path] = false;
@@ -1664,6 +1695,8 @@ function applySnap(kind, snap) {
   let changed = false;
   for (const ch of snap.docChanges()) {
     const id = ch.doc.id, path = kind + "/" + id;
+    /* Our own save coming back from the database: nothing new in it. */
+    if (ch.type !== "removed" && sentStable[path] && sentStable[path] === stable(ch.doc.data())) { lastKnown[path] = JSON.stringify(ch.doc.data()); continue; }
     if (dirty[path]) { if (ch.type !== "removed" && mergeRemote(kind, id, path, ch.doc.data())) changed = true; continue; }
     if (ch.type === "removed") { if (S[kind][id]) { delete S[kind][id]; changed = true; } continue; }
     const data = ch.doc.data(); const json = JSON.stringify(data);
@@ -1725,9 +1758,16 @@ async function boot() {
     const onErr = e => { if (e?.code === "permission-denied" && HOSTED) return showGate("denied"); setSave("err", e?.code === "revoked" ? "Read-only: access changed" : "Lost connection to the log"); };
     db.collection("gangs").onSnapshot(s => { const c = applySnap("gangs", s); got.gangs = true; if (c) reindex(); if (got.battles) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } }, onErr);
     let terrFirst = true;
+    const seedMap = () => { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; actNote = "Set up the campaign map"; for (const id of Object.keys(S.territories)) save("territories", id); actNote = ""; render(); };
     db.collection("territories").onSnapshot(s => {
       const c = applySnap("territories", s);
-      if (terrFirst) { terrFirst = false; if (s.docChanges().length === 0 && !Object.keys(S.territories).length) { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; actNote = "Set up the campaign map"; for (const id of Object.keys(S.territories)) save("territories", id); actNote = ""; render(); return; } }
+      /* A first answer from an empty offline cache (new browser, poor connection) is not proof the map is empty:
+         only set up a fresh map once the database server itself confirms there are no territories. */
+      if (terrFirst && s.metadata?.fromCache && s.docChanges().length === 0 && !Object.keys(S.territories).length) {
+        db.collection("territories").get({ source: "server" }).then(q => { if (terrFirst && q.empty && !Object.keys(S.territories).length) { terrFirst = false; seedMap(); } }).catch(() => {});
+        return;
+      }
+      if (terrFirst) { terrFirst = false; if (s.docChanges().length === 0 && !Object.keys(S.territories).length) { seedMap(); return; } }
       const m = S.territories._meta;
       if (m && !(m.done || []).includes("toll")) { for (const id of migrateTolls()) save("territories", id); m.done = [...(m.done || []), "toll"]; save("territories", "_meta"); if (S.loaded) render(); return; }
       if (c && S.loaded) render();
@@ -3820,6 +3860,8 @@ function availability() {
   if (AVAIL) return AVAIL;
   const st = {}, before = {}, src = id => S.battles[id];
   for (const E of availTimeline()) {
+    /* No Medical Escort was logged in the last post-cycle, and the campaign has moved on since: that fighter has died. */
+    for (const [fid, x] of Object.entries(st)) if (x.s === "critical" && x.untreated) st[fid] = { s: "dead", from: x.untreated, why: "Critical Injury not treated in the post-cycle" };
     before[E.id] = JSON.parse(JSON.stringify(st));
     const pc = isPC(E), inIt = new Set(pc ? Object.keys(S.gangs) : (E.gangs || []));
     /* A campaign battle the gang plays while a fighter is Critically Injured is the battle that fighter misses. */
@@ -3831,7 +3873,8 @@ function availability() {
       for (const [fid, x] of Object.entries(st)) {
         if (x.s === "critical" && !x.special) {
           const a = acts.find(a => a.kind === "medical" && a.target === fid), r = a && medResult(a);
-          if (!a) st[fid] = { s: "dead", from: E.id, why: "Critical Injury not treated in the post-cycle" };
+          /* Not logged yet: still waiting for the Medical Escort while this post-cycle is being filled in. */
+          if (!a) st[fid] = { ...x, untreated: E.id };
           else if (!r) st[fid] = { ...x, pending: E.id };
           else if (!medSaved(r)) st[fid] = { s: "dead", from: E.id, why: r.unpaid ? "Medical Escort not paid" : "Complications at the Doc" };
           else if (x.missed) delete st[fid];
@@ -3883,6 +3926,7 @@ const pcCritIn = (b, fid) => { const x = availability().before[pcRaw(b)?.id]?.[f
 function availText(x, short) {
   const from = S.battles[x.from], where = from ? (isPC(from) ? "the post-cycle of " + fmtDate(from.date) : `"${battleTitle(from)}" (${fmtDate(from.date)})`) : "";
   if (x.s === "recovery") return short ? "In Recovery" : `In Recovery (${x.why}${where ? ", " + where : ""}): misses ${x.battleOnly ? "their gang's next battle" : "their gang's next battle or post-cycle"}`;
+  if (x.s === "critical" && x.untreated && S.battles[x.untreated]) return short ? "Critically Injured" : `Critically Injured${where ? " in " + where : ""}: needs a Medical Escort in the post-cycle of ${fmtDate(S.battles[x.untreated].date)}, or dies`;
   if (x.s === "critical") return short ? "Critically Injured" : x.special ? `Critically Injured${where ? " in " + where : ""}: roll the Medical Escort on that battle's injury row`
     : `Critically Injured${where ? " in " + where : ""}: misses every battle until a Medical Escort in the next post-cycle, or dies`;
   if (x.s === "captured") return short ? "Captured" : `Captured${where ? " in " + where : ""}: roll on the Escape table`;
@@ -5837,7 +5881,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-15";
+const APP_BUILD = "2026-11-25";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
