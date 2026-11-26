@@ -936,6 +936,10 @@ let db = null;
 const dirty = {}, timers = {}, chains = {}, lastKnown = {};
 /* Saves that failed and are waiting to be tried again (path -> timer), and how many times each has failed. */
 const retryT = {}, saveFails = {};
+/* Live updates from the database, per collection: false while a listener has stopped and is reconnecting.
+   accessLost: the database withdrew this view's access, so nothing reconnects or saves. */
+const live = { gangs: true, battles: true, territories: true }; let accessLost = false;
+const allLive = () => Object.values(live).every(Boolean);
 /* What this browser last sent for each record (stable form), so the database echoing our own save back is not mistaken for someone else's edit. */
 const sentStable = {};
 /* Forget a sent version that never came back (a database that doesn't echo our own saves). */
@@ -1095,7 +1099,10 @@ function battleGangDeltas(b) {
 }
 
 /* ---------- storage ---------- */
-function setSave(kind, text) { const el = $("#save-state"); el.className = "save-state" + (kind ? " " + kind : ""); $("#save-text").textContent = text; const r = $("#save-retry"); if (r) r.hidden = !Object.keys(retryT).length; }
+function setSave(kind, text) {
+  /* "All changes saved" must not hide that other people's changes aren't arriving. */
+  if (!kind && S.mode === "db" && (accessLost || !allLive())) { kind = "err"; text = accessLost ? "Read-only: access to this log changed" : "Not up to date – reconnecting…"; }
+  const el = $("#save-state"); el.className = "save-state" + (kind ? " " + kind : ""); $("#save-text").textContent = text; const r = $("#save-retry"); if (r) r.hidden = !Object.keys(retryT).length; }
 let snapshotLocalLater = false;
 /* One-time roster additions for copies of the log kept in a browser. Each runs once (tracked in config.applied),
    adds only fighters that aren't there yet, and slots each one in after the fighter named in `after`. */
@@ -1654,12 +1661,20 @@ function flush(path) {
         throw e;
       }
     }
+    /* Not receiving live updates right now: read the record first and merge, so a change someone else made meanwhile isn't
+       overwritten. (Normally their changes have already arrived and been merged into ours.) */
+    let toSend = obj ? JSON.parse(JSON.stringify(obj)) : null, mergedIn = null;
+    if (toSend && live[kind] === false && lastKnown[path]) {
+      try { const r = await ref.get(); if (r.exists) { const m = merge3(JSON.parse(lastKnown[path]), toSend, r.data()); if (stable(m) !== stable(toSend)) { mergedIn = toSend; toSend = m; } } } catch (e) {}
+    }
     /* Remember exactly what was sent, not the record as it is when the save comes back: it may have been typed into since. */
-    const sent = obj ? JSON.stringify(obj) : null;
+    const sent = toSend ? JSON.stringify(toSend) : null;
     if (sent) sentStable[path] = stable(JSON.parse(sent)); else delete sentStable[path];
     const attempt = () => sent ? ref.set(JSON.parse(sent)) : ref.delete();
     try { await attempt(); } catch (e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 600)); await attempt(); } else throw e; }
     lastKnown[path] = sent; forgetSent(path);
+    /* Show what the merge brought in from the other side. */
+    if (mergedIn && S[kind][id]) { lastKnown[path] = JSON.stringify(mergedIn); const took = mergeRemote(kind, id, path, JSON.parse(sent)); lastKnown[path] = sent; if (took) { if (kind === "gangs") reindex(); after("rerender-soft"); } }
   };
   chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
     delete saveFails[path]; clearTimeout(retryT[path]); delete retryT[path];
@@ -1667,10 +1682,16 @@ function flush(path) {
     if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved");
   }).catch(e => {
     const code = e?.code;
-    /* Not allowed to edit: trying again won't help. */
-    if (code === "invalid_argument" || code === "permission-denied") {
-      dirty[path] = false;
-      setSave("err", "Not saved: " + (code === "invalid_argument" ? "you can view this log but not edit it" : "this account isn't allowed to edit the log"));
+    /* Errors that trying again can't fix (codes from Firebase and from the Claude copy's database). */
+    const PERMANENT = {
+      "invalid_argument": "you can view this log but not edit it, or the record is too large", "transform_error": "the record couldn't be prepared for saving",
+      "permission-denied": "this account isn't allowed to edit the log", "unauthenticated": "you've been signed out: reload the page and sign in",
+      "invalid-argument": "the record is too large or not in a form the database accepts",
+      "revoked": "access to this log changed", "not_granted": "this view isn't allowed to save", "capability_disabled": "saving isn't available in this view", "capability_removed": "saving isn't available in this view",
+    };
+    if (PERMANENT[code] || accessLost) {
+      dirty[path] = false; delete saveFails[path];
+      setSave("err", "Not saved: " + (PERMANENT[code] || "access to this log changed"));
       return;
     }
     /* Anything else (connection, a busy or full database): the change stays marked unsaved and is tried again, sooner when
@@ -1678,8 +1699,10 @@ function flush(path) {
     dirty[path] = true;
     const n = saveFails[path] = (saveFails[path] || 0) + 1, wait = Math.min(60000, 2000 * 2 ** (n - 1));
     clearTimeout(retryT[path]); retryT[path] = setTimeout(() => retrySave(path), wait);
-    const full = code === "quota_exceeded" || code === "resource-exhausted";
-    setSave("err", `Not saved yet: ${full ? "storage is full or the daily limit is reached" : "connection problem"}. Trying again in ${Math.round(wait / 1000)} s…`);
+    const why = code === "quota_exceeded" ? "the log's storage is full (delete something to make room)"
+      : code === "resource-exhausted" ? "the database's daily limit is reached"
+      : code === "resource_exhausted" ? "too many saves at once, slowing down" : "connection problem";
+    setSave("err", `Not saved yet: ${why}. Trying again in ${Math.round(wait / 1000)} s…`);
   });
 }
 function retrySave(path) {
@@ -1801,11 +1824,39 @@ async function boot() {
     S.mode = "db"; setSave("busy", "Loading…");
     $("#backup-tools").hidden = false;
     let got = { gangs: false, battles: false };
-    const onErr = e => { if (e?.code === "permission-denied" && HOSTED) return showGate("denied"); setSave("err", e?.code === "revoked" ? "Read-only: access changed" : "Lost connection to the log"); };
-    db.collection("gangs").onSnapshot(s => { const c = applySnap("gangs", s); got.gangs = true; if (c) reindex(); if (got.battles) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } }, onErr);
+    /* Each collection is listened to through listen(): if the database ends a listener (the connection stopped answering),
+       it reconnects after 2 s, 4 s, … up to a minute. Meanwhile the status bar says the log isn't up to date, saves read the
+       record first and merge (the Claude copy has no transactions), and on reconnecting everything that changed comes in,
+       including records deleted meanwhile. Only withdrawn access stops it for good. */
+    const listen = (name, handler) => {
+      let tries = 0;
+      const sub = () => {
+        let firstAfterGap = !live[name];
+        db.collection(name).onSnapshot(s => {
+          if (firstAfterGap) { firstAfterGap = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
+          handler(s);
+        }, e => {
+          if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
+          live[name] = false;
+          if (["revoked", "not_granted", "capability_disabled", "capability_removed"].includes(e?.code)) { accessLost = true; setSave("", ""); return; }
+          setSave("", "");
+          tries++; setTimeout(sub, Math.min(60000, 2000 * 2 ** (tries - 1)));
+        });
+      };
+      sub();
+    };
+    /* Records that were in the database when the listener stopped but aren't any more: someone deleted them meanwhile. */
+    const dropRemovedWhileAway = (name, s) => {
+      const docs = s.docs || s.docChanges().filter(c => c.type !== "removed").map(c => c.doc), have = new Set(docs.map(d => d.id));
+      let gone = 0;
+      for (const id of Object.keys(S[name])) { const path = name + "/" + id;
+        if (!have.has(id) && lastKnown[path] && !dirty[path] && !timers[path]) { delete S[name][id]; delete lastKnown[path]; gone++; } }
+      if (gone) { if (name === "gangs") reindex(); AVAIL = null; if (S.sel && !S.battles[S.sel]) S.sel = null; render(); }
+    };
+    listen("gangs", s => { const c = applySnap("gangs", s); got.gangs = true; if (c) reindex(); if (got.battles) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } });
     let terrFirst = true;
     const seedMap = () => { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; actNote = "Set up the campaign map"; for (const id of Object.keys(S.territories)) save("territories", id); actNote = ""; render(); };
-    db.collection("territories").onSnapshot(s => {
+    listen("territories", s => {
       const c = applySnap("territories", s);
       /* A first answer from an empty offline cache (new browser, poor connection) is not proof the map is empty:
          only set up a fresh map once the database server itself confirms there are no territories. */
@@ -1818,8 +1869,8 @@ async function boot() {
       if (m && !(m.done || []).includes("toll")) { for (const id of migrateTolls()) save("territories", id); m.done = [...(m.done || []), "toll"]; save("territories", "_meta"); if (S.loaded) render(); return; }
       if (c && S.loaded) render();
       runOnlinePatches();
-    }, onErr);
-    db.collection("battles").onSnapshot(s => { const c = applySnap("battles", s); got.battles = true; if (got.gangs) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } }, onErr);
+    });
+    listen("battles", s => { const c = applySnap("battles", s); got.battles = true; if (got.gangs) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } });
   } else {
     S.mode = "local";
     let d = null;
@@ -1843,6 +1894,16 @@ function lineBoxHeight() {
   const i = document.querySelector('#view input[type="text"], #view input[type="number"]');
   if (i && i.offsetHeight) lineH = i.offsetHeight;
   return lineH || 33;
+}
+/* Size many notes boxes at once: read every height, then set every height, so the page is laid out twice in all rather
+   than twice per box (it was most of the time a redraw took on a phone). Same sizes as fitTextarea. */
+function fitTextareas(list, keepOf) {
+  const tas = [...list].filter(t => !t.readOnly); if (!tas.length) return;
+  const match = lineBoxHeight(), grow = tas.map(t => t.classList.contains("grow"));
+  const before = tas.map((t, i) => grow[i] ? 0 : (keepOf(t) || t.offsetHeight || 0));
+  for (const t of tas) t.style.height = "auto";
+  const sh = tas.map(t => t.scrollHeight);
+  tas.forEach((t, i) => { t.style.height = (grow[i] ? Math.max(sh[i] + 2, match) : Math.max(sh[i] + 2, before[i], 64)) + "px"; });
 }
 /* Grow a notes box to fit its text; never shrink below the size the viewer dragged it to. */
 function fitTextarea(t, keep) {
@@ -1935,7 +1996,7 @@ function render() {
     v.innerHTML = `<div class="empty" style="margin-top:18px"><b>This part of the log couldn't be shown.</b> Something in the saved data doesn't fit (${esc(e?.message || String(e))}). Nothing has been changed or lost: the other tabs still work, and a restore point or backup can put the data right.${S.tab === "battles" && S.sel ? ` <button class="linkish" data-act="select" data-id="">Back to the battle list</button>` : ""}</div>`;
     return;
   }
-  for (const t of v.querySelectorAll("textarea")) fitTextarea(t, taHeights[t.id]);
+  fitTextareas(v.querySelectorAll("textarea"), t => taHeights[t.id]);
   markLineStarts();
   if (S.tab === "territories") { fitMapLabels(); fitMapRound(); }
   if (S.tab === "equipment") eqFilter();
@@ -5408,7 +5469,7 @@ document.addEventListener("keydown", ev => {
   document.querySelector(`.pca-handle[data-id="${CSS.escape(h.dataset.id)}"]`)?.focus();
 });
 let refitTimer;
-window.addEventListener("resize", () => { clearTimeout(refitTimer); refitTimer = setTimeout(() => { document.querySelectorAll("textarea.grow").forEach(t => fitTextarea(t)); markLineStarts(); }, 120); });
+window.addEventListener("resize", () => { clearTimeout(refitTimer); refitTimer = setTimeout(() => { fitTextareas(document.querySelectorAll("textarea.grow"), () => 0); markLineStarts(); }, 120); });
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape" && !$("#print-overlay").hidden) { closePrint(); return; }
   const el = ev.target;

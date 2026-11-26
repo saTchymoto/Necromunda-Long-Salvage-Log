@@ -494,11 +494,89 @@ def t_failed_save():
     return out
 
 
+def t_reconnect():
+    """When the database ends a live listener, the log says it isn't up to date (a later save mustn't hide that),
+    reconnects by itself, then has everyone's changes, including a record deleted meanwhile; a save made while
+    disconnected keeps the other person's change. Withdrawn access shows as read-only and isn't retried."""
+    out = []
+    for mode in ('claude', 'hosted'):
+        pg = page(mode)
+        ids = pg.evaluate('Object.keys(S.battles).filter(id => !isPC(S.battles[id]))'); a, gone = ids[0], ids[1]
+        pg.evaluate('() => window.__endListeners("battles", "unavailable")'); pg.wait_for_timeout(200)
+        if 'reconnecting' not in pg.inner_text('#save-state'): out.append(f'{mode}: status after the listener ended: "{pg.inner_text("#save-state")}"')
+        theirs = """([id, f, v]) => { const d = JSON.parse(JSON.stringify(window.__store['battles/' + id])); d[f] = v; window.__remoteWrite('battles/' + id, d); }"""
+        pg.evaluate(theirs, [a, 'post', 'THEIRS'])
+        pg.evaluate('id => { delete window.__store["battles/" + id]; }', gone)
+        pg.evaluate('id => { S.battles[id].pre = "MINE"; save("battles", id); }', a); pg.wait_for_timeout(1000)
+        if 'reconnecting' not in pg.inner_text('#save-state'): out.append(f'{mode}: a save while disconnected made the status say "{pg.inner_text("#save-state")}"')
+        if pg.evaluate('id => window.__store["battles/" + id].post', a) != 'THEIRS': out.append(f'{mode}: a save while disconnected overwrote the other person’s change')
+        pg.wait_for_timeout(3000)
+        st = pg.evaluate('id => [S.battles[id].post, S.battles[id].pre]', a)
+        if st != ['THEIRS', 'MINE']: out.append(f'{mode}: after reconnecting the log shows {st}, expected their post and my pre')
+        if pg.evaluate('id => !!S.battles[id]', gone): out.append(f'{mode}: a battle deleted while disconnected is still shown')
+        if pg.inner_text('#save-state').strip() != 'All changes saved': out.append(f'{mode}: status after reconnecting: "{pg.inner_text("#save-state")}"')
+        pg.evaluate(theirs, [a, 'post', 'LIVE AGAIN']); pg.wait_for_timeout(400)
+        if pg.evaluate('id => S.battles[id].post', a) != 'LIVE AGAIN': out.append(f'{mode}: changes still don’t arrive after reconnecting')
+        if mode == 'claude':
+            pg.evaluate('() => window.__endListeners("gangs", "revoked")'); pg.wait_for_timeout(2500)
+            if 'Read-only' not in pg.inner_text('#save-state'): out.append(f'{mode}: withdrawn access shows "{pg.inner_text("#save-state")}"')
+            n = pg.evaluate('() => (window.__listeners.gangs || []).length')
+            if n != 1: out.append(f'{mode}: after access was withdrawn the log subscribed again ({n} listeners)')
+        out += pg.errors; close(pg)
+    return out
+
+
+def t_save_error_codes():
+    """Each kind of save error: the ones that can never succeed aren't retried and say what's wrong; busy, full and
+    connection errors are retried and say which it is."""
+    out = []
+    cases = [('revoked', False, 'access to this log changed'), ('not_granted', False, "isn't allowed to save"), ('capability_disabled', False, "isn't available"),
+             ('transform_error', False, "couldn't be prepared"), ('invalid_argument', False, 'view this log but not edit'), ('unauthenticated', False, 'signed out'),
+             ('resource_exhausted', True, 'too many saves at once'), ('quota_exceeded', True, 'storage is full'), ('resource-exhausted', True, 'daily limit'), ('unavailable', True, 'connection problem')]
+    pg = page('claude')
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    for code, retried, words in cases:
+        pg.evaluate(FAIL_JS, [code, 3])
+        pg.evaluate('([id, v]) => { S.battles[id].post = v; save("battles", id); }', [bid, 'try ' + code])
+        try: pg.wait_for_function('() => document.querySelector("#save-text").textContent.startsWith("Not saved")', timeout=5000)
+        except Exception: pass
+        text, shown = pg.inner_text('#save-text'), pg.is_visible('#save-retry')
+        if words not in text: out.append(f'{code}: status says "{text}"')
+        if shown != retried: out.append(f'{code}: {"no retry scheduled" if retried else "retried although it can never succeed"}')
+        pg.evaluate('() => { for (const k of Object.keys(retryT)) { clearTimeout(retryT[k]); delete retryT[k]; } for (const k of Object.keys(dirty)) dirty[k] = false; }')
+        pg.evaluate(FAIL_JS, [code, 0])
+    out += pg.errors; close(pg)
+    return out
+
+
+def t_redraw_speed():
+    """Sizing the notes boxes after a redraw happens in one go: on a phone-speed processor (4× slower) it takes under
+    25 ms for every box on the Gangs tab and on a battle (one box at a time took 130–210 ms), and every box gets exactly
+    the height that sizing them one at a time gives."""
+    out = []
+    pg = page(width=390, height=844)
+    cdp = pg.context.new_cdp_session(pg); cdp.send('Emulation.setCPUThrottlingRate', {'rate': 4})
+    bid = pg.evaluate('Object.values(S.battles).filter(b => !isPC(b)).sort((a, b) => b.date.localeCompare(a.date))[0].id')
+    for label, setup in (('Gangs tab', "S.tab = 'gangs'"), ('newest battle', f"S.tab = 'battles'; S.sel = '{bid}'")):
+        r = pg.evaluate(f"""() => {{ {setup}; render(); const v = document.querySelector('#view'), tas = [...v.querySelectorAll('textarea')];
+          const one = tas.map(t => {{ t.style.height = ''; fitTextarea(t); return t.style.height; }});
+          tas.forEach(t => t.style.height = ''); document.body.offsetHeight;
+          const t0 = performance.now(); fitTextareas(tas, () => 0); const ms = performance.now() - t0;
+          const differ = tas.filter((t, i) => t.style.height !== one[i]).length;
+          return {{ ms, differ, n: tas.length }}; }}""")
+        if r['ms'] > 25: out.append(f'{label}: sizing {r["n"]} notes boxes takes {round(r["ms"])} ms on a phone-speed processor')
+        if r['differ']: out.append(f'{label}: {r["differ"]} of {r["n"]} notes boxes get a different height than before')
+    cdp.send('Emulation.setCPUThrottlingRate', {'rate': 1})
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
          'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day,
-         'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field}
+         'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field,
+         'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed}
 
 failed = 0
 for name, fn in TESTS.items():

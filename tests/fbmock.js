@@ -7,9 +7,13 @@
   const LAT = () => window.__lat ?? 30;
   const clone = v => v == null ? v : JSON.parse(JSON.stringify(v));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const emit = (coll, changes) => (listeners[coll] || []).forEach(fn => fn({ docChanges: () => changes, docs: changes.map(c => c.doc) }));
+  const emit = (coll, changes) => { const all = Object.entries(store).filter(([p]) => p.split('/')[0] === coll).map(([p, d]) => mkdoc(p.split('/')[1], d)); (listeners[coll] || []).forEach(fn => fn({ docChanges: () => changes, docs: all })); };
   const mkdoc = (id, data) => ({ id, exists: data != null, data: () => clone(data) });
   window.__writes = [];
+  /* window.__endListeners(coll, code): end every live listener on a collection, as the database does when its
+     connection stops answering ('unavailable') or access is withdrawn ('revoked'). */
+  window.__listeners = {};
+  window.__endListeners = (coll, code) => { for (const L of window.__listeners[coll] || []) if (!L.dead) { L.dead = true; L.err && L.err({ code, message: 'ended by test' }); } };
   const write = (path, data) => {
     const [coll, id] = path.split('/'); const had = path in store;
     if (data == null) delete store[path]; else store[path] = clone(data);
@@ -32,9 +36,10 @@
       for (const [f, op, v] of filters) docs = docs.filter(d => op === '<' ? d.data()[f] < v : op === '>' ? d.data()[f] > v : d.data()[f] === v);
       if (order) docs.sort((a, b) => (a.data()[order[0]] > b.data()[order[0]] ? 1 : -1) * (order[1] === 'desc' ? -1 : 1));
       { const ds = docs.slice(0, lim); return { docs: ds, empty: !ds.length, size: ds.length }; } },
-    onSnapshot: (fn, err) => { (listeners[coll] ||= []).push(fn);
-      setTimeout(() => fn({ docChanges: () => Object.entries(store).filter(([p]) => p.split('/')[0] === coll).map(([p, d]) => ({ type: 'added', doc: mkdoc(p.split('/')[1], d) })) }), 20);
-      return () => {}; }
+    onSnapshot: (fn, err) => { const L = { fn: s => { if (!L.dead) fn(s); }, err }; (listeners[coll] ||= []).push(L.fn); (window.__listeners[coll] ||= []).push(L);
+      setTimeout(() => { const all = Object.entries(store).filter(([p]) => p.split('/')[0] === coll).map(([p, d]) => mkdoc(p.split('/')[1], d));
+        L.fn({ docs: all, docChanges: () => all.map(doc => ({ type: 'added', doc })) }); }, 20);
+      return () => { L.dead = true; }; }
   });
   const fs = {
     enablePersistence: async () => {},
