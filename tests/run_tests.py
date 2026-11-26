@@ -68,6 +68,7 @@ def page(mode='local', data=None, width=1400, height=900, lat=30, extra=''):
     pg = ctx.new_page()
     pg.errors = []
     pg.on('pageerror', lambda e: pg.errors.append(str(e)))
+    pg.on('console', lambda m: m.type == 'error' and 'fonts.googleapis' not in m.text and 'ERR_' not in m.text and pg.errors.append('console: ' + m.text[:300]))
     pg.goto(HOSTED_URL if mode == 'hosted' else CLAUDE_URL)
     pg.wait_for_timeout(1300)
     return pg
@@ -124,13 +125,17 @@ def t_equipment():
     return out
 
 
+FAULT = "couldn't be shown"
+
+
 def t_every_view():
     out = []
-    for w, h, tag in ((1400, 900, 'desktop'), (390, 844, 'phone')):
+    for w, h, tag in ((1400, 900, 'desktop'), (390, 844, 'phone'), (320, 640, 'small phone')):
         pg = page(width=w, height=h)
         def check(label):
             wide = pg.evaluate('() => document.documentElement.scrollWidth - innerWidth')
             if wide > 2: out.append(f'{tag} {label}: page is {wide}px wider than the screen')
+            if FAULT in pg.inner_text('#view'): out.append(f'{tag} {label}: the view showed the data-fault message')
         all_views(pg, check)
         out += [f'{tag}: {e}' for e in pg.errors]; close(pg)
     return out
@@ -146,8 +151,8 @@ def t_injection():
         return v + pay if isinstance(v, str) and len(v) > 2 and not re.fullmatch(r'[\d-]+', v) else v
     data = {k: poison(DATA[k]) for k in ('gangs', 'battles', 'territories')}; data['config'] = DATA['config']
     pg = page(data=data); hits = []
-    all_views(pg, lambda label: hits.append(label) if pg.evaluate('(window.__xss || []).splice(0).length') else None)
-    out = [f'text typed into the log ran as code on {h}' for h in hits] + pg.errors; close(pg)
+    all_views(pg, lambda label: hits.append(label) if pg.evaluate('(window.__xss || []).splice(0).length') or FAULT in pg.inner_text('#view') else None)
+    out = [f'text typed into the log ran as code, or broke the view, on {h}' for h in hits] + pg.errors; close(pg)
     return out
 
 
@@ -282,9 +287,79 @@ def t_laptop_build():
     return out + errs
 
 
+def t_change_back():
+    """I save a record; someone else changes it, then changes it back to exactly what I saved: I must see their change-back,
+    and my next edit must not undo it."""
+    out = []
+    for mode in ('hosted', 'claude'):
+        pg = page(mode)
+        bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+        pg.evaluate('id => { S.battles[id].post = "MINE A"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+        theirs = """([id, v]) => { const d = JSON.parse(JSON.stringify(window.__store['battles/' + id])); d.post = v; window.__remoteWrite('battles/' + id, d); }"""
+        pg.evaluate(theirs, [bid, 'THEIRS B']); pg.wait_for_timeout(400)
+        pg.evaluate(theirs, [bid, 'MINE A']); pg.wait_for_timeout(400)
+        shown = pg.evaluate('id => S.battles[id].post', bid)
+        pg.evaluate('id => { S.battles[id].pre = "edited"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+        stored = pg.evaluate('id => window.__store["battles/" + id].post', bid)
+        if shown != 'MINE A': out.append(f'{mode}: after their change-back the log still shows "{shown}"')
+        if stored != 'MINE A': out.append(f'{mode}: my next edit wrote "{stored}" over their change-back')
+        out += pg.errors; close(pg)
+    return out
+
+
+def t_restore_point():
+    """Opening a restore point taken from the current data must show no differences, and must not change any record
+    (the one-time fixes it has already had are not run again). Also for restore points saved before they listed their fixes."""
+    out = []
+    pg = page('hosted')
+    pg.evaluate('async () => { rpMade = false; await makeRestorePoint(); }')
+    rid = pg.evaluate('Object.keys(window.__store).find(k => k.startsWith("restorepoints/"))')
+    if not rid:
+        close(pg); return ['no restore point was made']
+    rid = rid.split('/')[1]
+    for label, prep in (('new restore point', ''), ('restore point without a fix list', f'() => {{ delete window.__store["restorepoints/{rid}"].applied; }}')):
+        if prep: pg.evaluate(prep)
+        pg.evaluate('async id => { pendingRestore = null; await loadRestorePoint(id); }', rid); pg.wait_for_timeout(300)
+        r = pg.evaluate("""() => { const p = pendingRestore; if (!p) return null;
+          const changed = []; for (const k of ['gangs', 'battles', 'territories']) for (const id of Object.keys(p.d[k] || {})) if (id !== '_meta' && stable(p.d[k][id]) !== stable(S[k][id])) changed.push(k + '/' + id);
+          return { rows: p.rows.length, changed, heading: document.querySelector('#restore-confirm b')?.textContent || '' }; }""")
+        if r is None: out.append(f'{label}: did not open'); continue
+        if r['rows']: out.append(f'{label}: shows {r["rows"]} differences with the data it was just taken from')
+        if r['changed']: out.append(f'{label}: opening it changed {", ".join(r["changed"][:5])}')
+        if not r['heading'].startswith('Restore point'): out.append(f'{label}: heading says "{r["heading"]}"')
+    # every one-time fix must leave up-to-date data alone when run again
+    again = pg.evaluate("""() => { const keep = { gangs: S.gangs, battles: S.battles, territories: S.territories, config: S.config }, out = [];
+      for (const p of ROSTER_PATCHES) {
+        S.gangs = JSON.parse(JSON.stringify(keep.gangs)); S.battles = JSON.parse(JSON.stringify(keep.battles)); S.territories = JSON.parse(JSON.stringify(keep.territories)); S.config = { applied: ROSTER_PATCHES.filter(x => x !== p).map(x => x.id) };
+        applyRosterPatches();
+        for (const k of ['gangs', 'battles']) for (const id of Object.keys(keep[k])) if (stable(JSON.parse(JSON.stringify(S[k][id]))) !== stable(keep[k][id])) out.push(p.id + ' changes ' + k + '/' + id);
+      }
+      Object.assign(S, keep); reindex(); return out; }""")
+    out += ['running a fix again: ' + x for x in again if 'injury-table' not in x]
+    out += pg.errors; close(pg)
+    return out
+
+
+def t_munda_same_day():
+    """Munda XP typed in, then a battle logged later the same day: Should show counts that battle's XP; a battle logged
+    earlier that day doesn't count (Munda already had it)."""
+    pg = page()
+    r = pg.evaluate("""() => { const g = Object.values(S.gangs).find(x => !x.npc), f = g.fighters.find(x => canEarnXp(x.id) && !isGone(x) && !isVehicleRole(x.id) && !x.mundaSkip);
+      const today = localDay(), mk = (id, n) => ({ kind: 'conflict', id, date: today, scenario: id, gangs: [g.id], attacker: [], defender: [], injuries: [], participants: [], rewards: [{ id: 'r' + id, kind: 'xp', fighter: f.id, gang: g.id, amount: n }], events: [] });
+      S.battles['b-early'] = mk('b-early', 5);           // logged before the Munda XP was typed (no time in its id: treated as earlier)
+      AVAIL = null; setMundaXp(f.id, 40);
+      S.battles[uid('b-')] = mk('later', 3);              // logged afterwards, same day
+      for (const [id, b] of Object.entries(S.battles)) b.id = id;
+      AVAIL = null; return mundaXpOf(f, career()[f.id]); }""")
+    out = [] if r.get('since') == 3 else [f'XP since the Munda value: got {r.get("since")}, expected 3 (only the battle logged afterwards)']
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
-         'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build}
+         'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
+         'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day}
 
 failed = 0
 for name, fn in TESTS.items():

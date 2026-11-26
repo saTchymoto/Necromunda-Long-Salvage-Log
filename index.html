@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261125215454";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261126000346";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -311,7 +311,7 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .terr-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 10px; }
 .terr-card { display: grid; gap: 8px; align-content: start; padding: 10px 12px; border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; }
 .terr-head { display: flex; gap: 6px; align-items: center; }
-.terr-name { flex: 1 1 auto; font-weight: 600; font-size: 1rem; }
+.terr-name { flex: 1 1 auto; min-width: 0; width: 100%; font-weight: 600; font-size: 1rem; }
 .terr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
 .terr-grid select, .terr-grid input { width: 100%; }
 .terr-rules { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: .86rem; }
@@ -340,7 +340,9 @@ body.pca-dragging, body.pca-dragging * { cursor: grabbing !important; user-selec
 .blist .item .g { display: flex; gap: 2px 5px; align-items: center; font-size: .8rem; color: var(--muted); flex-wrap: wrap; }
 
 .sheet { display: grid; gap: 16px; min-width: 0; }
-section.block { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px 16px; display: grid; gap: 12px; min-width: 0; }
+section.block { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.block-head > * { min-width: 0; }
+.block-head h2 { overflow-wrap: anywhere; }
 .block-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .block-head .step { font-family: var(--font-mono); color: var(--accent); font-size: .8rem; margin-right: 8px; }
 .ds-grid { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; }
@@ -946,6 +948,8 @@ let db = null;
 const dirty = {}, timers = {}, chains = {}, lastKnown = {};
 /* What this browser last sent for each record (stable form), so the database echoing our own save back is not mistaken for someone else's edit. */
 const sentStable = {};
+/* Forget a sent version that never came back (a database that doesn't echo our own saves). */
+const forgetSent = path => { const mark = sentStable[path]; if (mark) setTimeout(() => { if (sentStable[path] === mark) delete sentStable[path]; }, 10000); };
 const LS_KEY = "long-salvage-log-v1";
 const STANDALONE = !(window.claude && typeof window.claude.use === "function");
 
@@ -954,6 +958,8 @@ const $ = (s, el = document) => el.querySelector(s);
 const hasText = v => typeof v === "string" && v.trim() !== "";
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+/* When a record made by uid() was created (ms), read back from its id; 0 for older ids that don't carry a time. */
+const idTime = id => { const m = String(id || "").match(/^[a-z]+-([0-9a-z]{8})[0-9a-z]{4}$/); const t = m ? parseInt(m[1], 36) : 0; return t > 1.6e12 && t < 4.1e12 ? t : 0; };
 const d6 = () => 1 + Math.floor(Math.random() * 6);
 
 function gangList() { return Object.values(S.gangs).sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.name.localeCompare(b.name)); }
@@ -1196,7 +1202,8 @@ const SAND_FISH_RENAMES = [
 ];
 function applySandFishAndRenascor(st) {
   const g = st.gangs.delaque;
-  if (g) {
+  /* Safe to run again: a Sand Fish roster synced on or after 17 Oct already has all of this (and newer numbers). */
+  if (g && !(g.rosterSynced && g.rosterSynced >= "2026-10-17")) {
     for (const [id, oldName, newName, role, type, inj] of SAND_FISH_RENAMES) {
       const f = (g.fighters || []).find(x => x.id === id); if (!f) continue;
       if (f.name !== newName) {
@@ -1271,7 +1278,7 @@ const ACT_LABEL = { date: "date", scenario: "scenario", kind: "battle type", loc
   credits: "credits", rep: "Rep", rating: "rating", wealth: "wealth", name: "name", short: "short name", player: "player", color: "colour", tactics: "gang tactics", type: "type", status: "status",
   role: "role", note: "note", xp: "XP", mundaXp: "Munda XP", mundaDate: "Munda date", injuries: "injuries", owner: "holder", income: "income", boon: "boon", effect: "special rule text",
   effectName: "special rule", repNow: "Rep this cycle", sheets: "post-cycle", territories: "territories", cycle: "cycle", events: "XP log", rewards: "rewards", actions: "actions", fighters: "fighters" };
-const ACT_SKIP = new Set(["item", "updated", "id", "listOrder", "claimPick", "stakeOwner", "order", "rosterSynced", "applied", "done", "seeded", "lines", "crew"]);
+const ACT_SKIP = new Set(["item", "updated", "id", "listOrder", "claimPick", "stakeOwner", "order", "rosterSynced", "applied", "done", "seeded", "lines", "crew", "mundaAt"]);
 const fieldLabel = k => ACT_LABEL[k] || String(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
 function actVal(v) {
   if (v === undefined || v === null || v === "") return "nothing";
@@ -1348,13 +1355,13 @@ function actDiff(kind, before, after, prefix = "") {
             const who = actItem(k, x), has = l => !!String(l?.name || "").trim(), om = new Map((y.lines || []).map(l => [l.id, l]));
             const VERB = { buy: "bought", sell: "sold", recruit: "recruited" }, NOUN = { buy: "purchase", sell: "sale", recruit: "recruit" };
             for (const l of x.lines || []) { const o = om.get(l.id);
-              if (!has(l)) { if (has(o)) out.push([key + "~" + id + "-L" + l.id, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]); continue; }
+              if (!has(l)) { if (has(o)) out.push([key + "~" + id + "\u241fL-" + l.id, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]); continue; }
               const added = `${who}: ${VERB[l.type] || "added"} ${lineText(l)}`;
-              if (!has(o)) { out.push([key + "~" + id + "+L" + l.id, added]); continue; }
+              if (!has(o)) { out.push([key + "~" + id + "\u241fL+" + l.id, added]); continue; }
               const was = lineText(o), now = lineText(l);
-              if (was !== now) out.push([key + "~" + id + "~L" + l.id, `${who}: ${NOUN[l.type] || "line"} changed to ${now} (was ${was})`, added]);
+              if (was !== now) out.push([key + "~" + id + "\u241fL~" + l.id, `${who}: ${NOUN[l.type] || "line"} changed to ${now} (was ${was})`, added]);
             }
-            for (const [lid, o] of om) if (has(o) && !(x.lines || []).some(l => l.id === lid)) out.push([key + "~" + id + "-L" + lid, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]);
+            for (const [lid, o] of om) if (has(o) && !(x.lines || []).some(l => l.id === lid)) out.push([key + "~" + id + "\u241fL-" + lid, `${who}: removed ${NOUN[o.type] || "line"} ${lineText(o)}`]);
           }
         }
         continue;
@@ -1398,8 +1405,9 @@ function logActivity(kind, id, before, after, why) {
   buf.t = now;
   for (const [k, t, asAdded] of lines) {
     /* Still the same purchase (added earlier in this entry): update that sentence instead of adding "changed …". */
-    const addK = asAdded && k.replace("~L", "+L"); if (addK && buf.lines.has(addK)) { buf.lines.set(addK, asAdded); continue; }
-    if (k.includes("-L")) { const a = k.replace("-L", "+L"); buf.lines.delete(k.replace("-L", "~L")); if (buf.lines.has(a)) { buf.lines.delete(a); continue; } }
+    /* Purchase lines are keyed …␟L+id (added), …␟L~id (changed) and …␟L-id (removed); ␟ never appears in a name. */
+    const addK = asAdded && k.replace("\u241fL~", "\u241fL+"); if (addK && buf.lines.has(addK)) { buf.lines.set(addK, asAdded); continue; }
+    if (k.includes("\u241fL-")) { const a = k.replace("\u241fL-", "\u241fL+"); buf.lines.delete(k.replace("\u241fL-", "\u241fL~")); if (buf.lines.has(a)) { buf.lines.delete(a); continue; } }
     buf.lines.delete(k); buf.lines.set(k, t);
   }
   const all = [...buf.lines.values()];
@@ -1467,7 +1475,7 @@ async function makeRestorePoint() {
     const data = { gangs: S.gangs, battles: S.battles, territories: S.territories }, json = JSON.stringify(data), gz = await gzipText(json);
     const who = window.firebase?.auth?.().currentUser;
     const rec = { saved: new Date().toISOString(), by: who?.displayName || who?.email || "", counts: { gangs: Object.keys(S.gangs).length, battles: Object.keys(S.battles).length, territories: terrList().length },
-      gz: gz || "", json: gz ? "" : json };
+      gz: gz || "", json: gz ? "" : json, applied: [...(S.config.applied || [])] };
     await db.runTransaction(async t => { if (!(await t.get(ref)).exists) t.set(ref, rec); });
     const ids = (await db.collection("restorepoints").get()).docs.map(d => d.id).sort();
     for (const old of ids.slice(0, Math.max(0, ids.length - RP_KEEP))) await db.doc("restorepoints/" + old).delete();
@@ -1490,7 +1498,10 @@ async function loadRestorePoint(id) {
   try {
     const snap = await db.doc("restorepoints/" + id).get(); if (!snap.exists) { toast("That restore point is gone"); return; }
     const r = snap.data(), data = JSON.parse(r.gz ? await gunzipText(r.gz) : r.json);
-    const d = { app: "long-salvage-log", version: 1, saved: r.saved, restorePoint: id, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: {} };
+    /* Run only the one-time fixes this snapshot hasn't had. Newer restore points list them; for older ones, every fix dated
+       up to the snapshot's day had already run on the live data it was taken from. */
+    const applied = Array.isArray(r.applied) ? r.applied : ROSTER_PATCHES.filter(p => p.id.slice(0, 10) <= id).map(p => p.id);
+    const d = { app: "long-salvage-log", version: 1, saved: r.saved, restorePoint: id, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: { applied } };
     upgradeBackup(d); renderRestore(d);
   } catch (e) { toast("Couldn't open that restore point"); }
 }
@@ -1567,7 +1578,7 @@ function renderRestore(d) {
   const KIND = { battles: "Battle / post-cycle", gangs: "Gang roster", territories: "Territory" };
   const what = r => r.state === "new" ? "Only in the backup" : r.state === "only" ? "Only in this log" : r.newer === "backup" ? "Changed – backup is newer" : r.newer === "here" ? "Changed – this log is newer" : "Changed in both (no date to compare)";
   el.innerHTML = `<div class="restore-box">
-    <div><b>Backup from ${esc(fmtDate(d.saved ? localDay(d.saved) : ""))}</b>: ${rows.length ? `${rows.length} difference${rows.length > 1 ? "s" : ""} with this log. Ticked rows take the backup's version; unticked rows keep this log's.` : "it matches this log. Nothing to load."}</div>
+    <div><b>${d.restorePoint ? `Restore point of ${esc(fmtDate(d.restorePoint))}` : `Backup from ${esc(fmtDate(d.saved ? localDay(d.saved) : ""))}`}</b>: ${rows.length ? `${rows.length} difference${rows.length > 1 ? "s" : ""} with this log. Ticked rows take the ${d.restorePoint ? "restore point's" : "backup's"} version; unticked rows keep this log's.` : "it matches this log. Nothing to load."}</div>
     ${rows.length ? `<div class="restore-rows">${rows.map((r, i) => `<label class="restore-row${r.newer === "here" ? " warn" : ""}"><input type="checkbox" data-restore="${i}"${r.use ? " checked" : ""}>
       <span class="muted">${KIND[r.kind]}</span><b>${esc(r.label)}</b><span class="${r.newer === "here" ? "neg" : "muted"}">${what(r)}${r.state === "only" ? " – tick to delete it" : ""}</span></label>`).join("")}</div>` : ""}
     <div class="toolbar" style="justify-content:flex-end">${rows.length ? `<button class="primary" data-act="confirmRestore">Apply ticked rows</button><button class="danger" data-act="replaceRestore">Replace everything</button>` : ""}<button data-act="cancelRestore">${rows.length ? "Cancel" : "Close"}</button></div>
@@ -1630,21 +1641,21 @@ function flush(path) {
        so two people saving the same record at the same moment both keep their changes. */
     if (HOSTED && obj && typeof db.runTransaction === "function") {
       try {
-        let merged = null, mine = null; const lk0 = lastKnown[path];
+        let merged = null, mine = null, mergedStable = ""; const lk0 = lastKnown[path];
         await db.runTransaction(async t => {
           const snap = await t.get(ref), remote = snap.exists ? snap.data() : null; mine = JSON.parse(JSON.stringify(S[kind][id] || obj));
           merged = remote && lastKnown[path] ? merge3(JSON.parse(lastKnown[path]), mine, remote) : mine;
-          sentStable[path] = stable(merged);
+          sentStable[path] = mergedStable = stable(merged);
           t.set(ref, merged);
         });
         /* If a different, newer version arrived from the database while we were saving, it has already been merged in: leave it. */
         const now = lastKnown[path];
-        if (now !== lk0 && (!now || stable(JSON.parse(now)) !== sentStable[path])) return;
+        if (now !== lk0 && (!now || stable(JSON.parse(now)) !== mergedStable)) return;
         /* Take in only what the other side changed (what the merge added to what we sent). Anything typed here while the save
            was on its way stays as it is and goes out with the next save. */
         lastKnown[path] = JSON.stringify(mine);
         const took = S[kind][id] ? mergeRemote(kind, id, path, merged) : false;
-        lastKnown[path] = JSON.stringify(merged);
+        lastKnown[path] = JSON.stringify(merged); forgetSent(path);
         if (took) { if (kind === "gangs") reindex(); after("rerender-soft"); }
         return;
       } catch (e) { if (!["unavailable", "failed-precondition", "aborted"].includes(e?.code)) throw e; /* offline: plain save below */ }
@@ -1654,7 +1665,7 @@ function flush(path) {
     if (sent) sentStable[path] = stable(JSON.parse(sent)); else delete sentStable[path];
     const attempt = () => sent ? ref.set(JSON.parse(sent)) : ref.delete();
     try { await attempt(); } catch (e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 600)); await attempt(); } else throw e; }
-    lastKnown[path] = sent;
+    lastKnown[path] = sent; forgetSent(path);
   };
   chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
     if (!timers[path]) dirty[path] = false;
@@ -1702,8 +1713,9 @@ function applySnap(kind, snap) {
   let changed = false;
   for (const ch of snap.docChanges()) {
     const id = ch.doc.id, path = kind + "/" + id;
-    /* Our own save coming back from the database: nothing new in it. */
-    if (ch.type !== "removed" && sentStable[path] && sentStable[path] === stable(ch.doc.data())) { lastKnown[path] = JSON.stringify(ch.doc.data()); continue; }
+    /* Our own save coming back from the database: nothing new in it. Each save is recognised once only (or not at all after
+       10 s), so someone later changing the record back to exactly what we sent is still taken in. */
+    if (ch.type !== "removed" && sentStable[path] && sentStable[path] === stable(ch.doc.data())) { delete sentStable[path]; lastKnown[path] = JSON.stringify(ch.doc.data()); continue; }
     if (dirty[path]) { if (ch.type !== "removed" && mergeRemote(kind, id, path, ch.doc.data())) changed = true; continue; }
     if (ch.type === "removed") { if (S[kind][id]) { delete S[kind][id]; changed = true; } continue; }
     const data = ch.doc.data(); const json = JSON.stringify(data);
@@ -4528,7 +4540,7 @@ function career(skipId) {
     if (isPC(b)) {
       if (b.id === skipId) continue;
       for (const v of pcViews(b)) {
-      for (const [id, x] of Object.entries(pcXp(v))) { row(id).xp += x; row(id).xpLog.push([b.date || "", x]); }
+      for (const [id, x] of Object.entries(pcXp(v))) { row(id).xp += x; row(id).xpLog.push([b.date || "", x, idTime(b.id)]); }
       for (const a of v.actions || []) {
         if (a.kind === "medical" && a.target) { const r = medResult(a); if (r?.inj) row(a.target).injuries.push({ name: r.inj[2], kind: r.inj[3], date: b.date }); }
         const who = a.kind === "bionics" ? a.target : a.kind === "chop" ? a.fighter : null;
@@ -4538,7 +4550,7 @@ function career(skipId) {
       continue;
     }
     for (const id of participants(b)) row(id).battles++;
-    for (const r of Object.values(battleXp(b))) { row(r.id).xp += r.total; if (r.total) row(r.id).xpLog.push([b.date || "", r.total]); }
+    for (const r of Object.values(battleXp(b))) { row(r.id).xp += r.total; if (r.total) row(r.id).xpLog.push([b.date || "", r.total, idTime(b.id)]); }
     /* Out of Action or Wrecked: whoever took the action dealt it (not for a fall: the faller is the one who went down). */
     for (const e of b.events || []) { if (!isDown(e)) continue; const v = injVictim(e); if (e.by && !isFall(e)) row(e.by).ooa++; if (v) row(v).downed++; }
     for (const i of b.injuries || []) { const r = injuryResult(i, b); if (r && i.victim) row(i.victim).injuries.push({ name: r[2], kind: r[3], date: b.date });
@@ -4554,7 +4566,9 @@ function mundaXpOf(f, k) {
   /* Vehicles (and models that ride with them, marked mundaSkip) aren't matched with Munda Manager for now: no current vehicle rules. */
   if (isVehicleRole(f.id) || f.mundaSkip) return { vehicle: true };
   const date = f.mundaDate || "", snap = f.mundaXp;
-  const since = (k?.xpLog || []).filter(([d]) => date && d > date).reduce((s, [, x]) => s + x, 0);
+  /* Counted: XP from later days, and from battles logged after the Munda XP was typed in on the same day. */
+  const at = f.mundaAt ? Date.parse(f.mundaAt) : 0;
+  const since = (k?.xpLog || []).filter(([d, , made]) => date && (d > date || (d === date && at && made > at))).reduce((s, [, x]) => s + x, 0);
   if (snap === "N/A") return { na: true, date, since };
   if (snap === undefined || snap === null || snap === "") return { missing: true, date, since };
   return { snap: +snap, date, since, now: +snap + since };
@@ -4591,7 +4605,7 @@ function setMundaXp(fid, raw) {
   const v = String(raw ?? "").trim(); if (v !== "" && !isFinite(+v)) return;
   const before = mundaXpOf(f, career()[fid]), val = v === "" ? null : Math.max(0, Math.round(+v));
   if (val === (before.missing ? null : before.snap)) return;
-  f.mundaXp = val; f.mundaDate = localDay();
+  f.mundaXp = val; f.mundaDate = localDay(); f.mundaAt = new Date().toISOString();
   const off = val !== null && before.now !== undefined && val !== before.now;
   if (off) f.mundaCheck = { expected: before.now, date: f.mundaDate }; else delete f.mundaCheck;
   save("gangs", g.id); render();
@@ -5900,7 +5914,7 @@ function reportTextInner(b) {
 }
 
 /* Build date: stamped automatically each time the laptop file is built (build_standalone.py). */
-const APP_BUILD = "2026-11-25";
+const APP_BUILD = "2026-11-26";
 $("#build-tag").textContent = "Version " + fmtDate(APP_BUILD);
 preloadLogos();
 boot();
