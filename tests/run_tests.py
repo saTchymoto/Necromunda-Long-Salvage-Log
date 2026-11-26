@@ -518,6 +518,13 @@ def t_reconnect():
         pg.evaluate(theirs, [a, 'post', 'LIVE AGAIN']); pg.wait_for_timeout(400)
         if pg.evaluate('id => S.battles[id].post', a) != 'LIVE AGAIN': out.append(f'{mode}: changes still don’t arrive after reconnecting')
         if mode == 'claude':
+            # reconnecting when the new listener delivers in pages: nothing may vanish meanwhile, the open battle stays open
+            pg.evaluate("id => { S.tab = 'battles'; S.sel = id; render(); window.__pagedNext = { battles: true }; window.__endListeners('battles', 'unavailable'); }", a)
+            counts = []
+            for _ in range(14): pg.wait_for_timeout(250); counts.append(pg.evaluate('Object.keys(S.battles).length'))
+            if min(counts) < max(counts): out.append(f'{mode}: while reconnecting page by page the battle list shrank to {min(counts)} of {max(counts)}')
+            if pg.evaluate('S.sel') != a: out.append(f'{mode}: reconnecting page by page closed the battle being viewed')
+            if pg.inner_text('#save-state').strip() != 'All changes saved': out.append(f'{mode}: after reconnecting page by page the status says "{pg.inner_text("#save-state")}"')
             pg.evaluate('() => window.__endListeners("gangs", "revoked")'); pg.wait_for_timeout(2500)
             if 'Read-only' not in pg.inner_text('#save-state'): out.append(f'{mode}: withdrawn access shows "{pg.inner_text("#save-state")}"')
             n = pg.evaluate('() => (window.__listeners.gangs || []).length')

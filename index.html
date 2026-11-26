@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261126193704";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261126202812";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1842,12 +1842,15 @@ async function boot() {
        record first and merge (the Claude copy has no transactions), and on reconnecting everything that changed comes in,
        including records deleted meanwhile. Only withdrawn access stops it for good. */
     const listen = (name, handler) => {
-      let tries = 0;
+      let tries = 0, stop = null;
       const sub = () => {
-        let firstAfterGap = !live[name];
-        db.collection(name).onSnapshot(s => {
-          if (firstAfterGap) { firstAfterGap = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
+        let catchingUp = !live[name];
+        if (stop) { try { stop(); } catch (e) {} }
+        stop = db.collection(name).onSnapshot(s => {
           handler(s);
+          /* Back after a gap. A delivery flagged fromCache may be only the first page (or a cached view), so wait for one
+             the database marks as final before treating anything missing from it as deleted, and before saying all's well. */
+          if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
         }, e => {
           if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
           live[name] = false;

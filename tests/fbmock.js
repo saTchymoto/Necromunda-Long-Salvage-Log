@@ -38,6 +38,12 @@
       { const ds = docs.slice(0, lim); return { docs: ds, empty: !ds.length, size: ds.length }; } },
     onSnapshot: (fn, err) => { const L = { fn: s => { if (!L.dead) fn(s); }, err }; (listeners[coll] ||= []).push(L.fn); (window.__listeners[coll] ||= []).push(L);
       setTimeout(() => { const all = Object.entries(store).filter(([p]) => p.split('/')[0] === coll).map(([p, d]) => mkdoc(p.split('/')[1], d));
+        /* window.__pagedNext[coll]: this listener delivers in two pages, as the Claude database may: a partial first page
+           flagged fromCache, then the rest. */
+        if ((window.__pagedNext || {})[coll]) { delete window.__pagedNext[coll]; const half = all.slice(0, Math.ceil(all.length / 3)), rest = all.slice(half.length);
+          L.fn({ docs: half, metadata: { fromCache: true }, docChanges: () => half.map(doc => ({ type: 'added', doc })) });
+          setTimeout(() => L.fn({ docs: all, metadata: { fromCache: false }, docChanges: () => rest.map(doc => ({ type: 'added', doc })) }), 500);
+          return; }
         L.fn({ docs: all, docChanges: () => all.map(doc => ({ type: 'added', doc })) }); }, 20);
       return () => { L.dead = true; }; }
   });

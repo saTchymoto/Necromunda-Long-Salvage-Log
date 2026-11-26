@@ -1829,12 +1829,15 @@ async function boot() {
        record first and merge (the Claude copy has no transactions), and on reconnecting everything that changed comes in,
        including records deleted meanwhile. Only withdrawn access stops it for good. */
     const listen = (name, handler) => {
-      let tries = 0;
+      let tries = 0, stop = null;
       const sub = () => {
-        let firstAfterGap = !live[name];
-        db.collection(name).onSnapshot(s => {
-          if (firstAfterGap) { firstAfterGap = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
+        let catchingUp = !live[name];
+        if (stop) { try { stop(); } catch (e) {} }
+        stop = db.collection(name).onSnapshot(s => {
           handler(s);
+          /* Back after a gap. A delivery flagged fromCache may be only the first page (or a cached view), so wait for one
+             the database marks as final before treating anything missing from it as deleted, and before saying all's well. */
+          if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
         }, e => {
           if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
           live[name] = false;
