@@ -75,6 +75,7 @@ label.restore-row:hover { background: var(--sunk); }
 .save-state.busy .dot { background: var(--si); }
 .save-state.err { color: var(--ooa); }
 .save-state.err .dot { background: var(--ooa); }
+.save-retry { font: inherit; color: inherit; background: none; border: 1px solid currentColor; border-radius: 4px; padding: 1px 6px; cursor: pointer; }
 
 .gang-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 16px; }
 .gang-tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: start; min-width: 0; }
@@ -695,7 +696,7 @@ td.total { font-weight: 600; color: var(--ok); }
         <button data-act="actList" id="act-btn" title="Who changed what in the log, newest first" hidden>Log record</button>
         <input type="file" id="backup-file" accept=".json,application/json" hidden>
       </span>
-      <div class="save-state" id="save-state" role="status"><span class="dot"></span><span id="save-text">Connecting…</span></div>
+      <div class="save-state" id="save-state" role="status"><span class="dot"></span><span id="save-text">Connecting…</span><button type="button" class="save-retry" id="save-retry" hidden>Retry now</button></div>
       <span class="toolbar" id="account" style="gap:6px;font-size:.8rem" hidden><span class="muted" id="account-name"></span><button class="ghost" data-act="signOut">Sign out</button></span>
       <div class="build-tag" title="Which version of the log this is. Post-cycles with a tab per gang need 29 Oct 2026 or later." id="build-tag"></div>
     </div>
@@ -933,6 +934,8 @@ const isLesson = n => n === "Lesson Learned" || n === "Lesson Learnt";
 const S = { gangs: {}, battles: {}, territories: {}, config: {}, tab: "battles", sel: null, loaded: false, mode: "none" };
 let db = null;
 const dirty = {}, timers = {}, chains = {}, lastKnown = {};
+/* Saves that failed and are waiting to be tried again (path -> timer), and how many times each has failed. */
+const retryT = {}, saveFails = {};
 /* What this browser last sent for each record (stable form), so the database echoing our own save back is not mistaken for someone else's edit. */
 const sentStable = {};
 /* Forget a sent version that never came back (a database that doesn't echo our own saves). */
@@ -1092,7 +1095,7 @@ function battleGangDeltas(b) {
 }
 
 /* ---------- storage ---------- */
-function setSave(kind, text) { const el = $("#save-state"); el.className = "save-state" + (kind ? " " + kind : ""); $("#save-text").textContent = text; }
+function setSave(kind, text) { const el = $("#save-state"); el.className = "save-state" + (kind ? " " + kind : ""); $("#save-text").textContent = text; const r = $("#save-retry"); if (r) r.hidden = !Object.keys(retryT).length; }
 let snapshotLocalLater = false;
 /* One-time roster additions for copies of the log kept in a browser. Each runs once (tracked in config.applied),
    adds only fighters that aren't there yet, and slots each one in after the fighter named in `after`. */
@@ -1645,7 +1648,11 @@ function flush(path) {
         lastKnown[path] = JSON.stringify(merged); forgetSent(path);
         if (took) { if (kind === "gangs") reindex(); after("rerender-soft"); }
         return;
-      } catch (e) { if (!["unavailable", "failed-precondition", "aborted"].includes(e?.code)) throw e; /* offline: plain save below */ }
+      } catch (e) {
+        /* Can't reach the database (offline): don't fall back to a plain save, which would overwrite changes others make
+           meanwhile when the connection comes back. Keep it unsaved; it's retried, merged, once the database answers. */
+        throw e;
+      }
     }
     /* Remember exactly what was sent, not the record as it is when the save comes back: it may have been typed into since. */
     const sent = obj ? JSON.stringify(obj) : null;
@@ -1655,15 +1662,46 @@ function flush(path) {
     lastKnown[path] = sent; forgetSent(path);
   };
   chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
+    delete saveFails[path]; clearTimeout(retryT[path]); delete retryT[path];
     if (!timers[path]) dirty[path] = false;
     if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved");
   }).catch(e => {
-    dirty[path] = false;
-    const why = e?.code === "quota_exceeded" || e?.code === "resource-exhausted" ? "storage is full or the daily limit is reached" : e?.code === "invalid_argument" ? "you can view this log but not edit it"
-      : e?.code === "permission-denied" ? "this account isn't allowed to edit the log" : "connection problem, try again";
-    setSave("err", "Not saved: " + why);
+    const code = e?.code;
+    /* Not allowed to edit: trying again won't help. */
+    if (code === "invalid_argument" || code === "permission-denied") {
+      dirty[path] = false;
+      setSave("err", "Not saved: " + (code === "invalid_argument" ? "you can view this log but not edit it" : "this account isn't allowed to edit the log"));
+      return;
+    }
+    /* Anything else (connection, a busy or full database): the change stays marked unsaved and is tried again, sooner when
+       the connection comes back, or straight away with Retry now. Leaving the page warns while it's unsaved. */
+    dirty[path] = true;
+    const n = saveFails[path] = (saveFails[path] || 0) + 1, wait = Math.min(60000, 2000 * 2 ** (n - 1));
+    clearTimeout(retryT[path]); retryT[path] = setTimeout(() => retrySave(path), wait);
+    const full = code === "quota_exceeded" || code === "resource-exhausted";
+    setSave("err", `Not saved yet: ${full ? "storage is full or the daily limit is reached" : "connection problem"}. Trying again in ${Math.round(wait / 1000)} s…`);
   });
 }
+function retrySave(path) {
+  clearTimeout(retryT[path]); delete retryT[path];
+  if (timers[path]) return;          /* a newer edit is about to save the record anyway */
+  setSave("busy", "Saving…"); flush(path);
+}
+const retryAllSaves = () => { for (const path of Object.keys(retryT)) retrySave(path); };
+document.addEventListener("click", e => { if (e.target.closest && e.target.closest("#save-retry")) retryAllSaves(); });
+window.addEventListener("online", retryAllSaves);
+/* Start any save that's still waiting out its short delay right away, e.g. when the page is hidden or closed. */
+function saveNow() {
+  if (timers.local) { clearTimeout(timers.local); delete timers.local; snapshotLocal(true); }
+  for (const path of Object.keys(timers)) if (path.includes("/") && timers[path]) { clearTimeout(timers[path]); flush(path); }
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveNow(); });
+window.addEventListener("pagehide", saveNow);
+/* Closing or reloading with changes that haven't reached the database yet: the browser asks first. */
+window.addEventListener("beforeunload", e => {
+  saveNow();
+  if (S.mode === "db" && Object.values(dirty).some(Boolean)) { e.preventDefault(); e.returnValue = ""; }
+});
 /* Three-way merge of one record: base = last version both sides had, ours, theirs. Fields only they changed are taken from
    theirs, fields only we changed are kept, and where both changed the same field ours wins. A post-cycle's per-gang tabs merge separately. */
 function merge3(base, ours, theirs) {
@@ -3731,6 +3769,8 @@ const MED_TABLE = [
 const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
 const wholeNum = v => Math.max(0, Math.floor(num(v)));
 const credTxt = n => (n > 0 ? "+" : "") + n + " cr";
+/* Credits in written reports: "+75 credits", "−340 credits" (a real minus sign, so it never reads as a dash). */
+const credWords = n => (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n) + " credits";
 function medResult(a) {
   if (a.pay === false) return { row: [0, 0, "Not paid: the fighter dies", "dead", "No roll is made when the gang can't or won't pay the 30 credits."], unpaid: true };
   const n = parseInt(a.d6, 10); if (!(n >= 1 && n <= 6)) return null;
@@ -4340,13 +4380,13 @@ function pcTodo(b) {
   for (const a of b.actions || []) if (a.kind === "trade" && a.items) L.push(["Equipment", a.items, "info"]);
   for (const a of b.actions || []) if (a.kind === "claim" && claimOk(a) && S.territories[a.claimT]) {
     const tr = S.territories[a.claimT], t = claimLine(a), k = t && terrOf(t), ch = k && terrChoice(t, k), c = pcCredits(a);
-    L.push(["Claim Jump", `Boons of ${tr.name} (${ownerName(tr)} keeps them too)${t ? ": " + terrBoonText(t) : ""}${c && (!t || ch === "income") ? ` – ${credTxt(c).replace(" cr", " credits")}` : ""}`, "ok"]);
+    L.push(["Claim Jump", `Boons of ${tr.name} (${ownerName(tr)} keeps them too)${t ? ": " + terrBoonText(t) : ""}${c && (!t || ch === "income") ? ` (${credWords(c)})` : ""}`, "ok"]);
     if (ch === "equipment") L.push(["Stash", `add ${k[3]} for free (Claim Jump: ${tr.name})`, "info"]);
     if (ch === "recruit") L.push(["Recruit", `Claim Jump (${tr.name}): ${recText(t)}`, "info"]);
   }
   for (const [fid, x] of Object.entries(pcXp(b))) L.push(["XP", `${fname(fid)}: +${x} XP`, "xpv"]);
   const st = pcStash(b);
-  if (st.net || st.after !== null) L.push(["Stash", `${credTxt(st.net).replace(" cr", " credits")}${st.after !== null ? ` → ${st.after} credits` : ""}`, st.net < 0 ? "ooa" : "ok"]);
+  if (st.net || st.after !== null) L.push(["Stash", `${credWords(st.net)}${st.after !== null ? ` → ${st.after} credits` : ""}`, st.net < 0 ? "ooa" : "ok"]);
   return L;
 }
 /* Checklist entries grouped by heading, in the order each heading first appears. */
@@ -4504,17 +4544,17 @@ function pcReportText(b) {
   const g = pcGang(b), st = pcStash(b), L = [];
   L.push(`POST-CYCLE: ${g?.name || "no gang picked"}`, `${fmtDate(b.date)}${b.cycle ? " · " + b.cycle : ""}`, "", "POST-CYCLE ACTIONS");
   for (const a of (b.actions || []).filter(a => a.fighter || a.target || pcCredits(a) || pcWho(a).length)) { const c = pcCredits(a), x = pcXpTotal(a), lines = pcDetailLines(a), d = lines ? "" : pcDetail(a);
-    L.push(`${pcWhoText(a) || fname(a.fighter)}: ${pcActionName(a)}${d ? " – " + d : ""}${c ? " – " + credTxt(c).replace(" cr", " credits") : ""}${x ? ` – +${x} XP` : ""}`);
+    L.push(`${pcWhoText(a) || fname(a.fighter)}: ${pcActionName(a)}${d ? " – " + d : ""}${c ? ` (${credWords(c)})` : ""}${x ? ` (+${x} XP)` : ""}`);
     for (const t of lines || []) L.push(`   - ${t}`); }
   if (!(b.actions || []).length) L.push("None");
   L.push("", "COLLECT INCOME");
-  for (const t of b.territories || []) L.push(`${terrLabel(t) || "Territory"}${terrBoonText(t) ? " – " + terrBoonText(t) : ""}${terrCredits(t) ? " – " + credTxt(terrCredits(t)).replace(" cr", " credits") : ""}`);
+  for (const t of b.territories || []) L.push(`${terrLabel(t) || "Territory"}${terrBoonText(t) ? " – " + terrBoonText(t) : ""}${terrCredits(t) ? ` (${credWords(terrCredits(t))})` : ""}`);
   if (st.inc.hasRep) L.push(`Reputation ${st.inc.rep} × 10 = ${st.inc.repCr} credits`);
-  L.push(`Total income: ${credTxt(st.inc.total).replace(" cr", " credits")}`);
+  L.push(`Total income: ${credWords(st.inc.total)}`);
   L.push("", "UPDATE ROSTER (IN MUNDA MANAGER)");
   for (const [w, xs] of groupTodo(pcTodo(b))) { if (xs.length === 1) L.push(`${w}: ${xs[0][0]}`); else { L.push(`${w}:`); for (const [t] of xs) L.push(`   - ${t}`); } }
   if (hasText(b.roster)) L.push(b.roster.trim());
-  L.push("", `STASH: ${credTxt(st.net).replace(" cr", " credits")}${st.after !== null ? ` (${st.before} → ${st.after})` : ""}`);
+  L.push("", `STASH: ${credWords(st.net)}${st.after !== null ? ` (${st.before} → ${st.after})` : ""}`);
   if (hasText(b.notes)) L.push("", "NOTES", b.notes.trim());
   return L.join("\n");
 }

@@ -31,7 +31,8 @@ python3 tests/run_tests.py backup.json                 # everything
 python3 tests/run_tests.py backup.json two-editors     # one test
 ```
 
-`backup.json` is any file from the log's Backup button; it is only read. The tests build both versions, open every tab,
+`backup.json` is any file from the log's Backup button; it is only read. A full run takes about 15 minutes: `every-button`
+and `every-field` (every control in every view, and whether each change reaches the database) take most of it. The tests build both versions, open every tab,
 battle and post-cycle at desktop and phone width, and use a stand-in database (`tests/fbmock.js`) to check saving: typing
 while a save is under way, and two people editing the same record at once. Keep backups and `build/` out of the repository:
 they hold campaign data.

@@ -356,10 +356,149 @@ def t_munda_same_day():
     return out
 
 
+def views_of(pg):
+    """Every view: the tabs, each gang page, each battle, and each gang's sheet of each post-cycle."""
+    v = [{'label': 'battle list', 'tab': 'battles'}] + [{'label': 'tab ' + t, 'tab': t} for t in ('territories', 'equipment', 'rules')]
+    for g in pg.evaluate('Object.keys(S.gangs)'):
+        npc = pg.evaluate('g => !!S.gangs[g].npc', g); v.append({'label': ('npcs/' if npc else 'gangs/') + g, 'tab': 'npcs' if npc else 'gangs', 'gangView': g})
+    for bid in pg.evaluate('Object.keys(S.battles)'):
+        if pg.evaluate('id => isPC(S.battles[id])', bid):
+            for g in pg.evaluate('pcGangIds()'): v.append({'label': bid + '/' + g, 'tab': 'battles', 'sel': bid, 'pcGang': g})
+        else: v.append({'label': bid, 'tab': 'battles', 'sel': bid})
+    return v
+
+
+CONTROLS_JS = r"""
+async ({ views, mode }) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const errs = []; let cur = '';
+  window.addEventListener('error', e => errs.push(cur + ': ' + e.message));
+  window.addEventListener('unhandledrejection', e => errs.push(cur + ': ' + (e.reason && e.reason.message || e.reason)));
+  const ce = console.error; console.error = (...a) => { errs.push(cur + ': ' + a.map(String).join(' ').slice(0, 200)); ce(...a); };
+  window.print = () => {}; window.confirm = () => true; window.alert = () => {}; window.prompt = () => null;
+  const base = JSON.stringify({ gangs: S.gangs, battles: S.battles, territories: S.territories });
+  const go = v => { S.tab = v.tab; S.sel = v.sel || null; if (v.gangView) { S.gangView = v.gangView; S.npcView = v.gangView; } if (v.pcGang) (S.pcTab ||= {})[v.sel] = v.pcGang; render(); };
+  const reset = async v => { const d = JSON.parse(base); S.gangs = d.gangs; S.battles = d.battles; S.territories = d.territories; reindex(); AVAIL = null;
+    S.confirmDel = null; S.copyText = ''; const o = document.querySelector('#print-overlay'); if (o) o.hidden = true; go(v); await sleep(10); };
+  const pat = x => x.replace(/(^|\.)([a-z]+-)?[a-z0-9]*\d[a-z0-9-]*(?=\.|$)/gi, '$1*');
+  const unsaved = () => { const out = [];
+    for (const k of ['gangs', 'battles', 'territories']) for (const id of Object.keys(S[k])) {
+      const a = stable(JSON.parse(JSON.stringify(S[k][id]))), b = window.__store[k + '/' + id] ? stable(window.__store[k + '/' + id]) : 'none'; if (a !== b) out.push(k + '/' + id); }
+    return out; };
+  const seen = new Set(), faults = [], notSaved = []; let done = 0;
+  for (const v of views) {
+    if (mode === 'click') {
+      await reset(v);
+      const sig = el => (v.sel ? (v.pcGang ? 'pc' : 'battle') : v.tab) + ':' + el.dataset.act + ':' + (el.dataset.kind || el.dataset.type || '');
+      const n = document.querySelectorAll('#view [data-act]').length;
+      for (let i = 0; i < n; i++) {
+        await reset(v); const el = document.querySelectorAll('#view [data-act]')[i]; if (!el || el.dataset.act === 'loadBackup') continue;
+        const k = sig(el); if (seen.has(k)) continue; seen.add(k); cur = v.label + ' → ' + el.dataset.act;
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); done++; await sleep(30);
+        if (document.querySelector('#view').innerText.includes("couldn't be shown")) faults.push(cur);
+      }
+    } else {
+      go(v); await sleep(300);
+      const n = document.querySelectorAll('#view [data-bind]').length;
+      for (let i = 0; i < n; i++) {
+        const el = document.querySelectorAll('#view [data-bind]')[i]; if (!el) continue;
+        const k = pat(el.dataset.bind) + ':' + (el.tagName === 'SELECT' ? 'sel' : el.type); if (seen.has(k)) continue; seen.add(k); cur = v.label + ' → ' + el.dataset.bind;
+        if (el.tagName === 'SELECT') { const o = [...el.options].find(o => o.value && o.value !== el.value); if (!o) continue; el.value = o.value; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        else if (el.type === 'checkbox') { el.checked = !el.checked; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        else { el.value = el.type === 'number' ? '7' : el.type === 'date' ? '2026-11-20' : (el.value || '') + 'z'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+        done++; await sleep(1100);
+        if (document.querySelector('#view').innerText.includes("couldn't be shown")) faults.push(cur);
+        const u = unsaved(); if (u.length) notSaved.push(cur + ' (' + u.join(', ') + ')');
+      }
+    }
+  }
+  return { done, errs, faults, notSaved };
+}"""
+
+
+def t_every_button():
+    """Press every kind of button in every view (data put back after each): nothing may error or break the view."""
+    pg = page(); r = pg.evaluate(CONTROLS_JS, {'views': views_of(pg), 'mode': 'click'})
+    out = [] if r['done'] >= 80 else [f'only {r["done"]} kinds of button found']
+    out += list(dict.fromkeys(r['errs']))[:10] + ['data-fault message after ' + f for f in r['faults'][:10]] + pg.errors; close(pg)
+    return out
+
+
+def t_every_field():
+    """Change every kind of field in every view (Claude copy, stand-in database): nothing may error, and the change
+    must reach the database."""
+    pg = page('claude'); r = pg.evaluate(CONTROLS_JS, {'views': views_of(pg), 'mode': 'fill'})
+    out = [] if r['done'] > 150 else [f'only {r["done"]} kinds of field found']
+    out += list(dict.fromkeys(r['errs']))[:10] + ['data-fault message after ' + f for f in r['faults'][:10]] + ['not saved: ' + f for f in r['notSaved'][:10]] + pg.errors; close(pg)
+    return out
+
+
+def t_report_text():
+    """Every view, copied report and printout: no "undefined", "NaN", "[object Object]", "null", or a dash before a minus."""
+    bad = re.compile(r'\bundefined\b|\bNaN\b|\[object Object\]|(?<![\w-])null(?![\w-])|– -\d')
+    pg = page(); pg.evaluate('() => { window.print = () => {}; }'); out = []
+    def scan(label, text):
+        for m in bad.finditer(text or ''): out.append(f'{label}: …{text[max(0, m.start() - 40):m.end() + 20]}…'.replace('\n', ' | '))
+    for v in views_of(pg):
+        pg.evaluate("""v => { S.tab = v.tab; S.sel = v.sel || null; if (v.gangView) { S.gangView = v.gangView; S.npcView = v.gangView; } if (v.pcGang) (S.pcTab ||= {})[v.sel] = v.pcGang; S.copyText = ''; render(); }""", v)
+        pg.wait_for_timeout(80)
+        scan(v['label'], pg.evaluate("() => document.querySelector('#view').innerText + [...document.querySelectorAll('#view [title]')].map(e => e.title).join(' ')"))
+        if pg.query_selector('#view [data-act="copyReport"]'):
+            pg.evaluate("() => document.querySelector('#view [data-act=\"copyReport\"]').click()"); pg.wait_for_timeout(60)
+            scan(v['label'] + ' copied text', pg.evaluate("S.copyText || ''"))
+        for sel in ('#view [data-act="openPrint"]:not([data-all])', '#view [data-act="openPrint"][data-all="1"]'):
+            if pg.query_selector(sel):
+                pg.evaluate('s => document.querySelector(s).click()', sel); pg.wait_for_timeout(120)
+                scan(v['label'] + ' printout', pg.evaluate("document.querySelector('#print-overlay')?.innerText || ''"))
+                pg.evaluate("() => { const o = document.querySelector('#print-overlay'); if (o) o.hidden = true; }")
+    out = list(dict.fromkeys(out))[:15] + pg.errors; close(pg)
+    return out
+
+
+FAIL_JS = """([code, times]) => { const od = db.doc.bind(db); let left = times;
+  db.doc = p => { const r = od(p); if (p.startsWith('battles/')) { const s = r.set; r.set = async x => { if (left > 0) { left--; const e = new Error('x'); e.code = code; throw e; } return s(x); }; } return r; };
+  if (db.runTransaction) { const rt = db.runTransaction.bind(db); db.runTransaction = async fn => { if (left > 0) { left--; const e = new Error('x'); e.code = code; throw e; } return rt(fn); }; } }"""
+
+
+def t_failed_save():
+    """A save that fails is kept, retried by itself and by Retry now, and closing warns meanwhile; when it finally goes
+    through on the live site it is merged, so someone else's change made in the meantime survives. Not being allowed
+    to edit is not retried. Hiding the page starts a waiting save at once."""
+    out = []
+    warns = "(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; })()"
+    for mode in ('hosted', 'claude'):
+        pg = page(mode)
+        bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))'); dbv = lambda f='post': pg.evaluate('([id, f]) => window.__store["battles/" + id][f]', [bid, f])
+        pg.evaluate(FAIL_JS, ['unavailable', 2])
+        pg.evaluate('id => { S.battles[id].post = "MINE"; save("battles", id); }', bid)
+        try: pg.wait_for_selector('#save-retry', state='visible', timeout=4000)
+        except Exception: pass
+        if not pg.is_visible('#save-retry'): out.append(f'{mode}: no Retry now button after a failed save')
+        if not pg.evaluate(warns): out.append(f'{mode}: closing the page with an unsaved change does not warn')
+        pg.evaluate("""id => { const d = JSON.parse(JSON.stringify(window.__store['battles/' + id])); d.pre = 'THEIRS'; window.__remoteWrite('battles/' + id, d); }""", bid)
+        pg.wait_for_timeout(8000)
+        if dbv() != 'MINE': out.append(f'{mode}: the failed save was not retried by itself')
+        if mode == 'hosted' and dbv('pre') != 'THEIRS': out.append(f'{mode}: the retried save overwrote a change someone else made meanwhile')
+        if pg.evaluate(warns): out.append(f'{mode}: closing still warns after everything saved')
+        pg.evaluate(FAIL_JS, ['internal', 1])
+        pg.evaluate('id => { S.battles[id].post = "AGAIN"; save("battles", id); }', bid); pg.wait_for_timeout(1200)
+        if pg.is_visible('#save-retry'): pg.click('#save-retry'); pg.wait_for_timeout(800)
+        if dbv() != 'AGAIN': out.append(f'{mode}: Retry now did not save')
+        pg.evaluate(FAIL_JS, ['permission-denied', 1])
+        pg.evaluate('id => { S.battles[id].post = "NOPE"; save("battles", id); }', bid); pg.wait_for_timeout(4500)
+        if dbv() == 'NOPE' or pg.is_visible('#save-retry'): out.append(f'{mode}: a save the account isn\'t allowed to make was retried')
+        pg.evaluate('id => { S.battles[id].post = "HIDDEN"; save("battles", id); Object.defineProperty(document, "hidden", { value: true, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); }', bid)
+        pg.wait_for_timeout(300)
+        if dbv() != 'HIDDEN': out.append(f'{mode}: hiding the page did not start the waiting save')
+        out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
-         'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day}
+         'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day,
+         'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field}
 
 failed = 0
 for name, fn in TESTS.items():
