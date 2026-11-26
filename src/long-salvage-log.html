@@ -1099,6 +1099,9 @@ function battleGangDeltas(b) {
 }
 
 /* ---------- storage ---------- */
+/* Say "All changes saved" only when it's true: not while a change here is waiting to save, being saved or being retried.
+   (Other people's changes arriving says nothing about ours.) */
+const savedIfDone = () => { if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); };
 function setSave(kind, text) {
   /* "All changes saved" must not hide that other people's changes aren't arriving. */
   if (!kind && S.mode === "db" && (accessLost || !allLive())) { kind = "err"; text = accessLost ? "Read-only: access to this log changed" : "Not up to date – reconnecting…"; }
@@ -1679,7 +1682,7 @@ function flush(path) {
   chains[path] = (chains[path] || Promise.resolve()).then(run).then(() => { try { logActivity(kind, id, before, afterRec, why); } catch (e) {} }).then(() => {
     delete saveFails[path]; clearTimeout(retryT[path]); delete retryT[path];
     if (!timers[path]) dirty[path] = false;
-    if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved");
+    savedIfDone();
   }).catch(e => {
     const code = e?.code;
     /* Errors that trying again can't fix (codes from Firebase and from the Claude copy's database). */
@@ -1837,7 +1840,7 @@ async function boot() {
           handler(s);
           /* Back after a gap. A delivery flagged fromCache may be only the first page (or a cached view), so wait for one
              the database marks as final before treating anything missing from it as deleted, and before saying all's well. */
-          if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; if (!Object.values(dirty).some(Boolean)) setSave("", "All changes saved"); }
+          if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; savedIfDone(); }
         }, e => {
           if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
           live[name] = false;
@@ -1856,7 +1859,7 @@ async function boot() {
         if (!have.has(id) && lastKnown[path] && !dirty[path] && !timers[path]) { delete S[name][id]; delete lastKnown[path]; gone++; } }
       if (gone) { if (name === "gangs") reindex(); AVAIL = null; if (S.sel && !S.battles[S.sel]) S.sel = null; render(); }
     };
-    listen("gangs", s => { const c = applySnap("gangs", s); got.gangs = true; if (c) reindex(); if (got.battles) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } });
+    listen("gangs", s => { const c = applySnap("gangs", s); got.gangs = true; if (c) reindex(); if (got.battles) { S.loaded = true; savedIfDone(); if (c || !rendered) render(); runOnlinePatches(); } });
     let terrFirst = true;
     const seedMap = () => { S.territories = { ...seedTerritories(), _meta: { id: "_meta", seeded: new Date().toISOString() } }; actNote = "Set up the campaign map"; for (const id of Object.keys(S.territories)) save("territories", id); actNote = ""; render(); };
     listen("territories", s => {
@@ -1873,7 +1876,7 @@ async function boot() {
       if (c && S.loaded) render();
       runOnlinePatches();
     });
-    listen("battles", s => { const c = applySnap("battles", s); got.battles = true; if (got.gangs) { S.loaded = true; setSave("", "All changes saved"); if (c || !rendered) render(); runOnlinePatches(); } });
+    listen("battles", s => { const c = applySnap("battles", s); got.battles = true; if (got.gangs) { S.loaded = true; savedIfDone(); if (c || !rendered) render(); runOnlinePatches(); } });
   } else {
     S.mode = "local";
     let d = null;

@@ -578,12 +578,42 @@ def t_redraw_speed():
     return out
 
 
+def t_status_while_saving():
+    """The status line never says "All changes saved" while a change here is still waiting to save or being retried,
+    even when other people's changes arrive meanwhile; it does once the change has saved."""
+    out = []
+    theirs = """([coll, id]) => { const d = JSON.parse(JSON.stringify(window.__store[coll + '/' + id])); d.note = 'THEIRS ' + Date.now(); window.__remoteWrite(coll + '/' + id, d); }"""
+    for mode in ('hosted', 'claude'):
+        pg = page(mode)
+        bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+        other = pg.evaluate('id => Object.keys(S.battles).find(x => x !== id && !isPC(S.battles[x]))', bid)
+        gid = pg.evaluate('Object.keys(S.gangs)[0]')
+        txt = lambda: pg.inner_text('#save-text')
+        # a change waiting out the pause before it saves
+        pg.evaluate('id => { S.battles[id].post = "MINE"; save("battles", id); }', bid)
+        pg.evaluate(theirs, ['battles', other]); pg.wait_for_timeout(100)
+        if txt() == 'All changes saved': out.append(f'{mode}: says all saved while a change is waiting to save')
+        pg.wait_for_timeout(1500)
+        if txt() != 'All changes saved': out.append(f'{mode}: after the change saved the status says {txt()!r}')
+        # a save that fails and is being retried
+        pg.evaluate(FAIL_JS, ['unavailable', 50])
+        pg.evaluate('id => { S.battles[id].post = "AGAIN"; save("battles", id); }', bid)
+        try: pg.wait_for_selector('#save-retry', state='visible', timeout=6000)
+        except Exception: out.append(f'{mode}: the failing save never showed Retry now')
+        for coll, id in (('battles', other), ('gangs', gid)):
+            pg.evaluate(theirs, [coll, id]); pg.wait_for_timeout(300)
+            if txt() == 'All changes saved': out.append(f'{mode}: says all saved while a failed save is being retried (after a {coll} change arrived)')
+        out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
          'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day,
          'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field,
-         'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed}
+         'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed,
+         'status-while-saving': t_status_while_saving}
 
 failed = 0
 for name, fn in TESTS.items():
