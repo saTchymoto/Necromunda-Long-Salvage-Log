@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261127194827";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261127201528";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -960,6 +960,10 @@ const retryT = {}, saveFails = {};
 /* Live updates from the database, per collection: false while a listener has stopped and is reconnecting.
    accessLost: the database withdrew this view's access, so nothing reconnects or saves. */
 const live = { gangs: true, battles: true, territories: true }; let accessLost = false;
+/* confirmed[kind]: the database itself has delivered this part of the log (not just the copy the live site keeps in the
+   browser, which shows first and may be out of date). The day's restore point and one-time data fixes wait for all three. */
+const confirmed = { gangs: false, battles: false, territories: false };
+const allConfirmed = () => Object.values(confirmed).every(Boolean);
 const allLive = () => Object.values(live).every(Boolean);
 /* What this browser last sent for each record (stable form), so the database echoing our own save back is not mistaken for someone else's edit. */
 const sentStable = {};
@@ -1317,7 +1321,7 @@ function upgradeBackup(d) {
 }
 /* Online: one-time data fixes run once, by the first browser that loads a version containing them, and are recorded
    in the map settings record. The first time this runs it only records today's fixes as done (they were applied already). */
-let onlinePatched = false;
+let onlinePatched = false, onlineButtons = false;
 /* ---------- log record (hosted version) ----------
    Every save is compared with the version before it and written to activity/<id> as plain sentences, with who did it.
    Edits by the same person to the same record within ACT_JOIN_MS go into one entry; bulk work (loading a backup or a
@@ -1541,7 +1545,7 @@ async function gunzipText(b64) {
 }
 let rpMade = false;
 async function makeRestorePoint() {
-  if (rpMade || !HOSTED || S.mode !== "db" || !S.loaded || typeof db?.runTransaction !== "function") return;
+  if (rpMade || !HOSTED || S.mode !== "db" || !S.loaded || !allConfirmed() || typeof db?.runTransaction !== "function") return;
   rpMade = true;
   try {
     const id = localDay(), ref = db.doc("restorepoints/" + id);
@@ -1580,10 +1584,12 @@ async function loadRestorePoint(id) {
   } catch (e) { toast(e?.tooOld ? "This browser is too old to open restore points. Update it (on an iPhone or iPad: iOS 16.4 or later) or use another device." : "Couldn't open that restore point"); }
 }
 function runOnlinePatches() {
-  if (onlinePatched || S.mode !== "db" || !S.loaded || !S.territories._meta) return;
+  if (S.mode !== "db" || !S.loaded || !S.territories._meta) return;
+  if (!onlineButtons) { onlineButtons = true; if (HOSTED) { $("#rp-btn").hidden = false; $("#act-btn").hidden = false; } else if (ACT_USER) $("#act-btn").hidden = false; }
+  /* The rest works on the log as the database has it, not an out-of-date copy from the browser. */
+  if (onlinePatched || !allConfirmed()) return;
   onlinePatched = true;
-  if (HOSTED) { $("#rp-btn").hidden = false; $("#act-btn").hidden = false; setTimeout(makeRestorePoint, 8000); }
-  else if (ACT_USER) { $("#act-btn").hidden = false; setTimeout(pruneActivity, 8000); }
+  if (HOSTED) setTimeout(makeRestorePoint, 8000); else if (ACT_USER) setTimeout(pruneActivity, 8000);
   const m = S.territories._meta;
   if (!Array.isArray(m.applied)) { m.applied = ROSTER_PATCHES.map(p => p.id); save("territories", "_meta"); return; }
   const snap = {}; for (const k of ["gangs", "battles", "territories"]) for (const [id, v] of Object.entries(S[k])) snap[k + "/" + id] = stable(v);
@@ -1932,6 +1938,7 @@ async function boot() {
            deliveries carry no changed records. The Claude database takes no options. */
         const onNext = s => {
           handler(s);
+          if (!confirmed[name] && !s.metadata?.fromCache) { confirmed[name] = true; runOnlinePatches(); }
           /* Back after a gap. A delivery flagged fromCache may be only the first page (or a cached view), so wait for one
              the database marks as final before treating anything missing from it as deleted, and before saying all's well. */
           if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; savedIfDone(); }

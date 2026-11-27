@@ -953,6 +953,38 @@ def t_old_safari_restore():
     return out
 
 
+def t_stale_browser_copy():
+    """Live site opened on a slow connection with an out-of-date copy in the browser: the log shows straight away (Log record
+    and Restore points buttons too), but the day's restore point and one-time data fixes wait for the database's own version."""
+    import gzip, base64
+    out = []
+    extra = """
+    const __fsx = window.firebase.firestore(), __col = __fsx.collection.bind(__fsx); window.__serverAfter = 12000;
+    __fsx.collection = n => { const q = __col(n); if (!['gangs','battles','territories'].includes(n)) return q;
+      q.onSnapshot = (...a) => { const fn = a.find(x => typeof x === 'function');
+        const docs = () => Object.entries(window.__store).filter(([p]) => p.split('/')[0] === n).map(([p, d]) => ({ id: p.split('/')[1], exists: true, data: () => { const c = JSON.parse(JSON.stringify(d)); if (p === 'battles/b-2026-03-08' && !window.__serverIn) c.post = 'OLD COPY IN THE BROWSER'; return c; } }));
+        setTimeout(() => { const all = docs(); fn({ docs: all, metadata: { fromCache: true }, docChanges: () => all.map(doc => ({ type: 'added', doc })) }); }, 20);
+        setTimeout(() => { window.__serverIn = true; const all = docs(); fn({ docs: all, metadata: { fromCache: false }, docChanges: () => all.filter(d => d.id === 'b-2026-03-08').map(doc => ({ type: 'modified', doc })) }); }, window.__serverAfter);
+        return () => {}; };
+      return q; };
+    """
+    pg = page('hosted', extra=extra)
+    if not pg.evaluate('S.loaded'): out.append('the log did not show from the browser copy')
+    if not pg.is_visible('#act-btn') or not pg.is_visible('#rp-btn'): out.append('Log record / Restore points buttons waited for the database')
+    pg.wait_for_timeout(10000)
+    if pg.evaluate("Object.keys(window.__store).some(k => k.startsWith('restorepoints/'))"): out.append('a restore point was made before the database answered')
+    if pg.evaluate('onlinePatched'): out.append('one-time data fixes ran on the browser copy')
+    pg.wait_for_timeout(11000)
+    if not pg.evaluate('onlinePatched'): out.append('one-time data fixes never ran after the database answered')
+    rp = pg.evaluate("Object.entries(window.__store).filter(([k]) => k.startsWith('restorepoints/')).map(([k, v]) => v)")
+    if not rp: out.append('no restore point after the database answered')
+    else:
+        r = rp[0]; data = json.loads(gzip.decompress(base64.b64decode(r['gz'])) if r.get('gz') else r['json'])
+        if data['battles']['b-2026-03-08'].get('post') != DATA['battles']['b-2026-03-08'].get('post'): out.append(f"the restore point holds {data['battles']['b-2026-03-08'].get('post')!r}")
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -964,7 +996,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'messages': t_messages, 'panels-keyboard': t_panels_keyboard,
          'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
          'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys,
-         'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore}
+         'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore,
+         'stale-browser-copy': t_stale_browser_copy}
 
 failed = 0
 for name, fn in TESTS.items():
