@@ -593,7 +593,8 @@ td.total { font-weight: 600; color: var(--ok); }
 
 .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--r); display: grid; gap: 10px; justify-items: center; }
 .confirm { display: inline-flex; gap: 6px; align-items: center; font-size: .85rem; }
-.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: .88rem; z-index: 20; }
+#restore-confirm:focus:not(:focus-visible) { outline: none; }
+.toast { cursor: pointer; position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: .88rem; z-index: 20; }
 .copybox { width: 100%; min-height: 220px; font-family: var(--font-mono); font-size: .8rem; }
 .mobile-only { display: none; }
 .overlay { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; }
@@ -714,7 +715,8 @@ td.total { font-weight: 600; color: var(--ok); }
   </nav>
   <main id="view"><div class="empty" style="margin-top:18px">Loading the campaign log…</div></main>
 </div>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" hidden title="Click to dismiss"></div>
+<div class="sr-only" id="sr-status" role="status" aria-live="polite"></div>
 <div class="overlay" id="print-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="print-title">
   <div class="overlay-bar">
     <strong id="print-title">Battle report</strong>
@@ -1450,10 +1452,27 @@ function logActivity(kind, id, before, after, why) {
     : { at: buf.start, last: new Date(now).toISOString(), ...who, kind, rid: id, title, lines: all.slice(-60) };
   db.doc("activity/" + buf.doc).set(rec).catch(() => {});
 }
+/* The panel under the header (Log record, Restore points, the backup compare screen). Opening it moves keyboard focus into it;
+   closing it (its buttons, or Escape) puts focus back on the button it was opened from. */
+let panelOpener = null;
+function showPanel(label) {
+  const el = $("#restore-confirm"), opening = el.hidden, ae = document.activeElement;
+  if (opening) panelOpener = ae && ae !== document.body && !el.contains(ae) ? ae : null;
+  el.hidden = false; el.tabIndex = -1; el.setAttribute("role", "region"); el.setAttribute("aria-label", label);
+  /* Focus it when it opens, or when redrawing it removed the focused button; never pull focus away from somewhere else. */
+  if (opening || !document.activeElement || document.activeElement === document.body) el.focus();
+}
+function hidePanel() {
+  const el = $("#restore-confirm"), ae = document.activeElement, wasIn = el.contains(ae) || !ae || ae === document.body;
+  el.hidden = true;
+  const o = panelOpener; panelOpener = null;
+  if (wasIn && o?.isConnected && o.offsetParent !== null) o.focus();
+}
 let actView = null;
 async function showActivity(more) {
-  const el = $("#restore-confirm"); el.hidden = false;
+  const el = $("#restore-confirm");
   if (!more) { actView = { docs: [], last: null, who: actView?.who || "" }; el.innerHTML = `<div class="restore-box"><div class="toolbar" style="justify-content:space-between"><b>Log record</b><button data-act="cancelRestore">Close</button></div><span class="muted">Loading…</span></div>`; }
+  showPanel("Log record");
   try {
     /* "Show older" asks for entries before the oldest one shown (works the same in both databases). */
     let q = db.collection("activity");
@@ -1464,7 +1483,7 @@ async function showActivity(more) {
     const ids = [...new Set(actView.docs.filter(d => d.uid && !d.by).map(d => d.uid))];
     if (USER_NS && ids.length) { try { const ps = await USER_NS.profiles(ids); for (const id of ids) actNames[id] = ps?.[id]?.name || actNames[id] || ""; } catch (e) {} }
     renderActivity();
-  } catch (e) { el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Couldn't load the log record${e?.code === "permission-denied" ? ": the database rules don't allow it yet" : ""}.</span><div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`; }
+  } catch (e) { el.innerHTML = `<div class="restore-box"><b>Log record</b><span class="muted">Couldn't load the log record${e?.code === "permission-denied" ? ": the database rules don't allow it yet" : ""}.</span><div class="toolbar" style="justify-content:flex-end"><button data-act="cancelRestore">Close</button></div></div>`; showPanel("Log record"); }
 }
 const actNames = {};
 const actBy = d => d.by || (d.uid ? actNames[d.uid] || (d.uid === ACT_USER?.uid ? "You" : "Someone") : "?");
@@ -1480,7 +1499,8 @@ function renderActivity() {
         ${d.kind === "battles" && S.battles[d.rid] ? `<button class="linkish" data-act="openBattle" data-id="${esc(d.rid)}">${esc(d.title)}</button>` : `<span>${esc(d.title || "")}</span>`}</div>
         <ul>${(d.lines || []).map(t => `<li>${esc(t)}</li>`).join("")}</ul></li>`).join("")}</ol>` : `<p class="muted" style="margin:0">Nothing recorded yet.</p>`}
     <div class="toolbar" style="justify-content:flex-end">${v.done ? "" : `<button data-act="actMore">Show older</button>`}<button data-act="cancelRestore">Close</button></div></div>`;
-  $("#act-who").onchange = e => { actView.who = e.target.value; renderActivity(); };
+  $("#act-who").onchange = e => { actView.who = e.target.value; renderActivity(); $("#act-who")?.focus(); };
+  showPanel("Log record");
 }
 async function pruneActivity() {
   try { const cut = new Date(Date.now() - ACT_KEEP_DAYS * 864e5).toISOString();
@@ -1518,7 +1538,7 @@ async function makeRestorePoint() {
 }
 async function showRestorePoints() {
   const el = $("#restore-confirm");
-  el.innerHTML = `<div class="restore-box"><b>Restore points</b><span class="muted">Loading…</span></div>`; el.hidden = false;
+  el.innerHTML = `<div class="restore-box"><b>Restore points</b><span class="muted">Loading…</span></div>`; showPanel("Restore points");
   try {
     const docs = (await db.collection("restorepoints").get()).docs.map(d => ({ id: d.id, ...d.data() })).sort((a, c) => c.id.localeCompare(a.id));
     el.innerHTML = `<div class="restore-box">
@@ -1617,10 +1637,10 @@ function renderRestore(d) {
       <span class="muted">${KIND[r.kind]}</span><b>${esc(r.label)}</b><span class="${r.newer === "here" ? "neg" : "muted"}">${what(r)}${r.state === "only" ? " – tick to delete it" : ""}</span></label>`).join("")}</div>` : ""}
     <div class="toolbar" style="justify-content:flex-end">${rows.length ? `<button class="primary" data-act="confirmRestore">Apply ticked rows</button><button class="danger" data-act="replaceRestore">Replace everything</button>` : ""}<button data-act="cancelRestore">${rows.length ? "Cancel" : "Close"}</button></div>
   </div>`;
-  el.hidden = false;
+  showPanel(d.restorePoint ? "Restore point" : "Backup");
 }
 function applyRestore(all) {
-  const p = pendingRestore; pendingRestore = null; $("#restore-confirm").hidden = true; if (!p) return;
+  const p = pendingRestore; pendingRestore = null; hidePanel(); if (!p) return;
   const { d, rows } = p, online = S.mode === "db";
   /* Online every record taken from the backup (or deleted because the backup doesn't have it) is saved to the shared log.
      The map settings record (_meta) is never deleted online: it tracks which one-time fixes have run. */
@@ -5149,7 +5169,20 @@ function freezeRep(v) {
   const sh = pcRaw(v).sheets?.[v.gang]; if (!sh || sh.repNow !== undefined || !pcFilled(v)) return;
   const r = S.gangs[v.gang]?.rep; if (r !== undefined && r !== null && String(r).trim() !== "") sh.repNow = String(r);
 }
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); }
+/* A message at the bottom of the screen. It stays up long enough to read (longer messages for longer, up to 9 s), and a long
+   one isn't replaced by the next message until it has been up that long: the newest waiting message follows it. Clicking a
+   message dismisses it. Screen readers read each message out (#sr-status). */
+const toastMs = msg => Math.min(9000, Math.max(2200, 1200 + String(msg).length * 45));
+function toast(msg) {
+  const t = $("#toast"), now = Date.now();
+  if (toast.hold > now) { toast.pending = msg; clearTimeout(toast.p); toast.p = setTimeout(toastNext, toast.hold - now); return; }
+  const ms = toastMs(msg);
+  t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, ms);
+  toast.hold = ms > 3000 ? now + ms : 0;
+  t.onclick = () => { t.hidden = true; clearTimeout(toast.t); toastNext(); };
+  const sr = $("#sr-status"); if (sr) sr.textContent = sr.textContent === msg ? msg + "\u00a0" : msg;
+}
+function toastNext() { clearTimeout(toast.p); toast.hold = 0; const m = toast.pending; toast.pending = null; if (m) toast(m); }
 function ensureInjuryFor(b, e) {
   const victim = injVictim(e);
   if (!isDown(e) || !victim) return;
@@ -5515,6 +5548,15 @@ let refitTimer;
 window.addEventListener("resize", () => { clearTimeout(refitTimer); refitTimer = setTimeout(() => { fitTextareas(document.querySelectorAll("textarea.grow"), () => 0); markLineStarts(); }, 120); });
 document.addEventListener("keydown", ev => {
   if (ev.key === "Escape" && !$("#print-overlay").hidden) { closePrint(); return; }
+  /* While the print preview is open, Tab moves round its own buttons only. */
+  if (ev.key === "Tab" && !$("#print-overlay").hidden) {
+    const f = [...$("#print-overlay").querySelectorAll("button, a[href], select, input, textarea, [tabindex]:not([tabindex='-1'])")].filter(x => !x.disabled && x.offsetParent !== null);
+    if (f.length) { const i = f.indexOf(document.activeElement);
+      if (i < 0 || (!ev.shiftKey && i === f.length - 1) || (ev.shiftKey && i === 0)) { ev.preventDefault(); f[i < 0 || !ev.shiftKey ? 0 : f.length - 1].focus(); } }
+    return;
+  }
+  /* Escape closes the panel under the header (for a backup or restore point, the same as Cancel), unless a map menu is open. */
+  if (ev.key === "Escape" && !$("#restore-confirm").hidden && !S.mapMenu) { pendingRestore = null; hidePanel(); return; }
   const el = ev.target;
   if (ev.key === "Enter" && el.dataset?.munda) { ev.preventDefault(); el.blur(); return; }
   if (ev.key === "Enter" && el.dataset?.enter) { ev.preventDefault(); act(el.dataset.enter, el); }
@@ -5790,7 +5832,7 @@ function act(a, el) {
     case "rpLoad": loadRestorePoint(id); return;
     case "confirmRestore": applyRestore(false); return;
     case "replaceRestore": applyRestore(true); return;
-    case "cancelRestore": pendingRestore = null; $("#restore-confirm").hidden = true; return;
+    case "cancelRestore": pendingRestore = null; hidePanel(); return;
     case "closePrint": closePrint(); return;
     case "savePrint": savePrint(b); return;
     case "copyReport": {
@@ -5967,7 +6009,9 @@ async function getDownloads() {
   try { downloadsNs = window.claude && typeof window.claude.use === "function" ? await window.claude.use("downloads") : null; } catch (e) { downloadsNs = null; }
   return downloadsNs;
 }
+let printOpener = null;
 function openPrint(b, all = false) {
+  if ($("#print-overlay").hidden) { const ae = document.activeElement; printOpener = ae && ae !== document.body ? ae : null; }
   S.printAll = isPC(b) && all;
   if (!document.getElementById("report-css")) { const st = document.createElement("style"); st.id = "report-css"; st.textContent = REPORT_CSS; document.head.appendChild(st); }
   $("#print-paper").innerHTML = reportBody(b);
@@ -5978,9 +6022,12 @@ function openPrint(b, all = false) {
   document.body.style.overflow = "hidden";
   $("#save-print").focus();
   if (STANDALONE) { $("#save-print").textContent = "Print"; $("#save-print").hidden = false; $("#print-hint").textContent = "Choose Save as PDF in the print dialog to keep a copy."; return; }
-  getDownloads().then(d => { if (!d) { $("#save-print").hidden = true; $("#print-hint").textContent = "Saving files isn't available in this view. Use Copy as text instead."; } });
+  getDownloads().then(d => { if (!d) { const had = document.activeElement === $("#save-print"); $("#save-print").hidden = true; if (had) $('#print-overlay [data-act="copyReport"]').focus(); $("#print-hint").textContent = "Saving files isn't available in this view. Use Copy as text instead."; } });
 }
-function closePrint() { $("#print-overlay").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("printing"); }
+function closePrint() {
+  $("#print-overlay").hidden = true; document.body.style.overflow = ""; document.body.classList.remove("printing");
+  const o = printOpener; printOpener = null; if (o?.isConnected && o.offsetParent !== null) o.focus();
+}
 async function savePrint(b) {
   if (STANDALONE) { window.print(); return; }
   const d = await getDownloads();

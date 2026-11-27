@@ -689,6 +689,78 @@ def t_activity_owner():
     return out
 
 
+def t_messages():
+    """Messages at the bottom stay up long enough to read; a long one isn't replaced by the next message straight away (the next
+    follows it); clicking dismisses; each message is also put where screen readers read it out."""
+    out = []
+    pg = page('claude')
+    clash = "Someone else edited this at the same time. Their other changes were merged in; where you both changed the same thing, yours was kept."
+    if pg.evaluate('m => toastMs(m)', clash) < 6000: out.append('the merge message is up for less than 6 s')
+    if pg.evaluate('toastMs("Saved")') < 2200: out.append('short messages are up for less than 2.2 s')
+    pg.evaluate('m => toast(m)', clash); pg.wait_for_timeout(600)
+    pg.evaluate('toast("Kyn: +1 XP")'); pg.wait_for_timeout(100)
+    if pg.inner_text('#toast') != clash: out.append('the long message was replaced straight away')
+    if 'merged in' not in pg.inner_text('#sr-status'): out.append('the long message was not put where screen readers read it')
+    pg.wait_for_timeout(4000)
+    if not pg.is_visible('#toast') or pg.inner_text('#toast') != clash: out.append('the long message went before 4.5 s')
+    pg.wait_for_timeout(2600)
+    if pg.inner_text('#toast') != 'Kyn: +1 XP' or not pg.is_visible('#toast'): out.append(f'the waiting message did not follow: {pg.inner_text("#toast")!r}')
+    if pg.inner_text('#sr-status').strip() != 'Kyn: +1 XP': out.append('the following message was not read out')
+    pg.evaluate('m => toast(m)', clash); pg.wait_for_timeout(200); pg.click('#toast'); pg.wait_for_timeout(100)
+    if pg.is_visible('#toast'): out.append('clicking did not dismiss the message')
+    pg.evaluate('toast("One")'); pg.wait_for_timeout(100); pg.evaluate('toast("Two")'); pg.wait_for_timeout(100)
+    if pg.inner_text('#toast') != 'Two': out.append('a short message held up the next one')
+    pg.wait_for_timeout(2500)
+    if pg.is_visible('#toast'): out.append('a short message stayed up too long')
+    out += pg.errors; close(pg)
+    return out
+
+
+def t_panels_keyboard():
+    """Log record, Restore points, the backup compare screen and the print preview: opening one moves keyboard focus into it,
+    Escape closes it (a backup: same as Cancel), and focus goes back to the button it was opened from. Tab stays inside the
+    print preview."""
+    import copy
+    out = []
+    pg = page('hosted')
+    inside = "sel => { const p = document.querySelector(sel); return !!p && (p === document.activeElement || p.contains(document.activeElement)); }"
+    focused = "() => { const a = document.activeElement; return a ? (a.id || a.dataset.act || a.tagName) : ''; }"
+    for btn, label in (('#act-btn', 'Log record'), ('#rp-btn', 'Restore points')):
+        pg.wait_for_selector(btn, state='visible', timeout=12000)
+        pg.focus(btn); pg.keyboard.press('Enter'); pg.wait_for_timeout(600)
+        if not pg.evaluate(inside, '#restore-confirm'): out.append(f'{label}: focus did not move into the panel ({pg.evaluate(focused)})')
+        pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
+        if pg.is_visible('#restore-confirm'): out.append(f'{label}: Escape did not close it')
+        if pg.evaluate(focused) != btn[1:]: out.append(f'{label}: focus went to {pg.evaluate(focused)!r}, not back to its button')
+    # backup compare: Escape is Cancel; Apply puts focus back too
+    bk = copy.deepcopy(DATA); bk['app'] = 'long-salvage-log'; bk['version'] = 1; bk['saved'] = '2026-11-20T10:00:00Z'
+    bk['gangs']['kyn']['credits'] = 999; bk['gangs']['kyn']['updated'] = '2099-01-01T00:00:00Z'
+    path = '/tmp/kb-backup.json'; open(path, 'w').write(json.dumps(bk))
+    for how in ('Escape', 'apply'):
+        pg.focus('[data-act=loadBackup]')
+        with pg.expect_file_chooser() as fc: pg.keyboard.press('Enter')
+        fc.value.set_files(path); pg.wait_for_timeout(500)
+        if not pg.evaluate(inside, '#restore-confirm'): out.append(f'backup ({how}): focus did not move into the compare screen')
+        if how == 'Escape':
+            pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
+            if pg.evaluate('pendingRestore !== null') or pg.is_visible('#restore-confirm'): out.append('backup: Escape did not cancel')
+        else:
+            pg.focus('#restore-confirm [data-act=confirmRestore]'); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+        if pg.evaluate(focused) != 'loadBackup': out.append(f'backup ({how}): focus went to {pg.evaluate(focused)!r}, not back to Load backup')
+    # print preview
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    pg.evaluate('id => { S.tab = "battles"; S.sel = id; render(); }', bid); pg.wait_for_timeout(200)
+    pg.focus('#view [data-act=openPrint]'); pg.keyboard.press('Enter'); pg.wait_for_timeout(300)
+    for k in ['Tab'] * 5 + ['Shift+Tab'] * 5:
+        pg.keyboard.press(k)
+        if not pg.evaluate(inside, '#print-overlay'): out.append(f'print: {k} left the preview ({pg.evaluate(focused)})'); break
+    pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
+    if pg.is_visible('#print-overlay'): out.append('print: Escape did not close it')
+    if pg.evaluate(focused) != 'openPrint': out.append(f'print: focus went to {pg.evaluate(focused)!r}, not back to Print report')
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -696,7 +768,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field,
          'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed,
          'status-while-saving': t_status_while_saving,
-         'odd-records': t_odd_records, 'activity-owner': t_activity_owner}
+         'odd-records': t_odd_records, 'activity-owner': t_activity_owner,
+         'messages': t_messages, 'panels-keyboard': t_panels_keyboard}
 
 failed = 0
 for name, fn in TESTS.items():
