@@ -1250,7 +1250,41 @@ function applyRosterPatches() {
 }
 /* A backup saved by an older copy of the log is brought up to date first: the one-time fixes it never had are run on
    the backup's own records, so loading it can't bring back old roles or type text. */
+/* Records as they come in (from the database, this browser's storage, a backup file or a restore point) are tidied so one of
+   an unexpected shape can't stop the log showing: lists that should be lists become lists, and empty entries in lists are
+   dropped. A record that's already the right shape is left exactly as it is. Returns true if anything was changed. */
+/* (Not attacker/defender, which older battles keep as a single gang id, nor done, which is also a yes/no on side jobs.) */
+const LIST_KEYS = new Set(["actions", "crew", "events", "fighters", "formerNames", "gangs", "injuries", "lines",
+  "participants", "remove", "rewards", "steps", "tactics", "territories", "tSkipped", "uneventful", "visRounds"]);
+function tidyRec(rec) {
+  let changed = false;
+  const fixList = v => {
+    if (Array.isArray(v)) return v;
+    changed = true;
+    if (typeof v === "string") return v ? [v] : [];
+    return v && typeof v === "object" ? Object.values(v) : [];
+  };
+  const walk = o => {
+    if (Array.isArray(o)) { for (let i = o.length - 1; i >= 0; i--) if (o[i] == null) { o.splice(i, 1); changed = true; } else walk(o[i]); return; }
+    if (!o || typeof o !== "object") return;
+    for (const k of Object.keys(o)) {
+      if (LIST_KEYS.has(k) && o[k] !== undefined) o[k] = fixList(o[k]);
+      if (k === "sheets") { if (!o.sheets || typeof o.sheets !== "object" || Array.isArray(o.sheets)) { o.sheets = {}; changed = true; }
+        for (const g of Object.keys(o.sheets)) if (!o.sheets[g] || typeof o.sheets[g] !== "object") { delete o.sheets[g]; changed = true; } }
+      walk(o[k]);
+    }
+  };
+  walk(rec);
+  return changed;
+}
+/* A whole set of records (gangs, battles or territories) from storage or a file: drop entries that aren't records at all. */
+function tidyColl(c) {
+  if (!c || typeof c !== "object" || Array.isArray(c)) return {};
+  for (const id of Object.keys(c)) { const r = c[id]; if (!r || typeof r !== "object" || Array.isArray(r)) { delete c[id]; continue; } if (r.id == null) r.id = id; tidyRec(r); }
+  return c;
+}
 function upgradeBackup(d) {
+  d.gangs = tidyColl(d.gangs); d.battles = tidyColl(d.battles); d.territories = tidyColl(d.territories);
   const keep = { gangs: S.gangs, battles: S.battles, territories: S.territories, config: S.config };
   try {
     S.gangs = d.gangs; S.battles = d.battles; S.territories = d.territories || {}; S.config = { ...(d.config || {}), applied: [...((d.config || {}).applied || [])] };
@@ -1756,6 +1790,7 @@ function mergeRemote(kind, id, path, data) {
   } };
   if (local.sheets && base.sheets && remote.sheets) mergeObj(local.sheets, base.sheets, remote.sheets);
   mergeObj(local, base, remote, "sheets");
+  if (tidyRec(local)) took++;
   lastKnown[path] = JSON.stringify(data);
   if (clash) toast("Someone else edited this at the same time. Their other changes were merged in; where you both changed the same thing, yours was kept.");
   return took > 0;
@@ -1771,7 +1806,7 @@ function applySnap(kind, snap) {
     if (ch.type === "removed") { if (S[kind][id]) { delete S[kind][id]; changed = true; } continue; }
     const data = ch.doc.data(); const json = JSON.stringify(data);
     if (lastKnown[path] === json) continue;
-    lastKnown[path] = json; S[kind][id] = { ...JSON.parse(json), id }; changed = true;
+    lastKnown[path] = json; const rec = { ...JSON.parse(json), id }; tidyRec(rec); S[kind][id] = rec; changed = true;
   }
   return changed;
 }
@@ -1882,7 +1917,7 @@ async function boot() {
     let d = null;
     try { const raw = localStorage.getItem(LS_KEY); if (raw) d = JSON.parse(raw); } catch (e) {}
     if (!d) { try { const el = document.getElementById("seed-data"); if (el) { d = JSON.parse(el.textContent); snapshotLocalLater = true; } } catch (e) {} }
-    if (d) { S.gangs = d.gangs || {}; S.battles = d.battles || {}; S.territories = d.territories || {}; S.config = d.config || {}; }
+    if (d) { S.gangs = tidyColl(d.gangs); S.battles = tidyColl(d.battles); S.territories = tidyColl(d.territories); S.config = d.config && typeof d.config === "object" ? d.config : {}; }
     if (applyRosterPatches()) snapshotLocalLater = true;
     reindex(); S.loaded = true;
     $("#backup-tools").hidden = false;
@@ -1978,7 +2013,9 @@ function markLineStarts() {
 function render() {
   AVAIL = null;
   rendered = true;
-  renderStrip();
+  /* The gang strip is drawn outside the main safety net below, so it gets its own: if something in the saved data stops
+     it drawing, leave the strip empty and still show the rest of the log. */
+  try { renderStrip(); } catch (e) { console.error(e); const st = $("#gang-strip"); if (st) st.innerHTML = ""; }
   for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === S.tab));
   const v = $("#view");
   const ae = document.activeElement;

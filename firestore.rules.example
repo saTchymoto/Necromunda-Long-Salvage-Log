@@ -15,10 +15,13 @@ service cloud.firestore {
     match /{collection}/{docId} {
       allow read, write: if isPlayer() && collection in ['gangs', 'battles', 'territories', 'restorepoints'];
     }
-    // The log record: anyone may read and add entries, only the author may extend their own entry, old entries may be tidied away.
+    // The log record: every player may read it. An entry can only be added under your own account, only its author may
+    // extend it, and the account on it can't be changed afterwards. Any player may delete entries (old ones are tidied away).
     match /activity/{entryId} {
-      allow read, create, delete: if isPlayer();
-      allow update: if isPlayer() && resource.data.email == request.auth.token.email;
+      allow read, delete: if isPlayer();
+      allow create: if isPlayer() && request.resource.data.email == request.auth.token.email;
+      allow update: if isPlayer() && resource.data.email == request.auth.token.email
+        && request.resource.data.email == resource.data.email;
     }
   }
 }

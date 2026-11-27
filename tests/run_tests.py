@@ -607,13 +607,96 @@ def t_status_while_saving():
     return out
 
 
+ODD_RECORDS = [
+    ('battles', {'id': 'b-odd-gangs', 'date': '2026-11-02', 'gangs': 'kyn'}),
+    ('battles', {'id': 'b-odd-events', 'date': '2026-11-02', 'gangs': ['kyn', 'fangs'], 'events': {}}),
+    ('battles', {'id': 'b-odd-rewards', 'date': '2026-11-02', 'gangs': ['kyn', 'fangs'], 'rewards': [None]}),
+    ('battles', {'id': 'b-odd-xp', 'date': '2026-11-02', 'gangs': ['kyn', 'fangs'], 'events': [None, {'id': 'e1', 'by': 'ghost', 'action': 'zzz'}], 'injuries': [None]}),
+    ('battles', {'id': 'pc-odd', 'type': 'postcycle', 'date': '2026-11-03', 'sheets': {'kyn': {'actions': [{'id': 'a1', 'kind': 'nonsense', 'crew': None}, None]}, 'zzz': None}}),
+    ('gangs', {'id': 'g-odd', 'name': 'Odd', 'fighters': [None, {'name': 'no id'}, {'id': 'g-odd-a', 'injuries': 'Hobbled'}]}),
+]
+
+
+def t_odd_records():
+    """One record of an unexpected shape (a list stored as text or an object, empty entries in a list) never stops the log
+    showing: every tab and battle still shows, whether the record is there on opening, arrives from someone else, or comes in
+    a backup file. If the gang strip itself fails, the rest of the log still shows. Records of the right shape are untouched."""
+    import copy
+    out = []
+    views = "() => { const v = []; for (const t of ['battles','gangs','npcs','territories','stats','equipment','rules']) v.push([t, null]); for (const id of Object.keys(S.battles)) v.push(['battles', id]); return v; }"
+    def check(pg, label):
+        if pg.evaluate('!S.loaded') or 'Loading the campaign log' in pg.inner_text('#view'): out.append(f'{label}: stuck on Loading'); return
+        for t, sel in pg.evaluate(views):
+            err = pg.evaluate("([t, s]) => { try { S.tab = t; S.sel = s; render(); return ''; } catch (e) { return String(e); } }", [t, sel])
+            txt = pg.inner_text('#view')
+            if err or "couldn't be shown" in txt: out.append(f'{label}: {t}/{sel} failed {err or txt[:120]!r}'); return
+    for kind, rec in ODD_RECORDS:
+        for mode in ('local', 'claude', 'hosted'):
+            d = copy.deepcopy(DATA); d[kind][rec['id']] = copy.deepcopy(rec)
+            pg = page(mode, data=d); pg.wait_for_timeout(300)
+            check(pg, f'{mode}, {rec["id"]} there on opening')
+            if mode != 'local': out += [f'{mode} {rec["id"]}: {e}' for e in pg.errors]
+            close(pg)
+        pg = page('claude')
+        pg.evaluate('([p, d]) => window.__remoteWrite(p, d)', [f'{kind}/{rec["id"]}', rec]); pg.wait_for_timeout(400)
+        check(pg, f'{rec["id"]} arriving from someone else'); out += [f'arriving {rec["id"]}: {e}' for e in pg.errors]; close(pg)
+    # a backup file holding all of them, plus entries that aren't records at all
+    bk = copy.deepcopy(DATA); bk['app'] = 'long-salvage-log'; bk['version'] = 1
+    for kind, rec in ODD_RECORDS: bk[kind][rec['id']] = copy.deepcopy(rec)
+    bk['battles']['b-null'] = None; bk['gangs']['g-text'] = 'just text'
+    path = '/tmp/odd-backup.json'; open(path, 'w').write(json.dumps(bk))
+    pg = page('local')
+    with pg.expect_file_chooser() as fc: pg.evaluate("document.querySelector('[data-act=loadBackup]').click()")
+    fc.value.set_files(path); pg.wait_for_timeout(400)
+    if not pg.is_visible('#restore-confirm'): out.append('odd backup: the compare screen did not open')
+    else:
+        pg.click('[data-act=replaceRestore]'); pg.wait_for_timeout(400); check(pg, 'odd backup loaded')
+        if pg.evaluate("'b-null' in S.battles || 'g-text' in S.gangs"): out.append('odd backup: entries that are not records were taken in')
+    out += [f'backup: {e}' for e in pg.errors]; close(pg)
+    # the gang strip failing on its own
+    pg = page('claude')
+    err = pg.evaluate("() => { window.battleGangDeltas = () => { throw new Error('strip test'); }; try { S.tab = 'gangs'; render(); return ''; } catch (e) { return String(e); } }"); pg.wait_for_timeout(100)
+    if err: out.append(f'strip failing: drawing the page stopped ({err})')
+    txt = pg.inner_text('#view')
+    if "couldn't be shown" in txt or 'Loading' in txt or len(txt) < 200: out.append(f'strip failing: the Gangs tab did not show ({txt[:80]!r})')
+    close(pg)
+    # records of the right shape are left exactly as they are
+    pg = page('local')
+    same = pg.evaluate("d => { if (typeof tidyRec !== 'function') return ['(no tidying at all)']; const out = []; for (const k of ['gangs','battles','territories']) for (const [id, r] of Object.entries(d[k])) { const c = JSON.parse(JSON.stringify(r)); if (tidyRec(c) || JSON.stringify(c) !== JSON.stringify(r)) out.push(k + '/' + id); } return out; }", DATA)
+    if same: out.append(f'tidying changed records that were fine: {same[:5]}')
+    close(pg)
+    return out
+
+
+def t_activity_owner():
+    """Live site: Log record entries carry the signed-in account's email (which the database rules check), and the example
+    rules only let an entry be added under your own account and never change the account on it."""
+    out = []
+    pg = page('hosted')
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    pg.evaluate('id => { S.battles[id].post = "logged"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+    pg.evaluate('id => { S.battles[id].post = "logged again"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+    acts = pg.evaluate("Object.entries(window.__store).filter(([p]) => p.startsWith('activity/')).map(([p, v]) => v)")
+    if not acts: out.append('no Log record entry was written')
+    for a in acts:
+        if a.get('email') != 't@example.com': out.append(f'entry email is {a.get("email")!r}, not the signed-in account')
+    out += pg.errors; close(pg)
+    rules = open(os.path.join(ROOT, 'firestore.rules.example')).read()
+    block = rules[rules.index('match /activity/'):]
+    if 'allow create: if isPlayer() && request.resource.data.email == request.auth.token.email' not in block: out.append('rules: adding an entry is not limited to your own account')
+    if 'request.resource.data.email == resource.data.email' not in block: out.append('rules: the account on an entry can be changed')
+    if re.search(r'allow [^;]*\bcreate\b[^;]*: if isPlayer\(\);', block): out.append('rules: anyone may still add entries under any name')
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
          'change-back': t_change_back, 'restore-point': t_restore_point, 'munda-same-day': t_munda_same_day,
          'failed-save': t_failed_save, 'report-text': t_report_text, 'every-button': t_every_button, 'every-field': t_every_field,
          'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed,
-         'status-while-saving': t_status_while_saving}
+         'status-while-saving': t_status_while_saving,
+         'odd-records': t_odd_records, 'activity-owner': t_activity_owner}
 
 failed = 0
 for name, fn in TESTS.items():
