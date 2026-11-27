@@ -1039,6 +1039,24 @@ def t_random_edits():
     return out
 
 
+def t_lease_clock():
+    """Claude copy on a device whose clock is 10 minutes behind or ahead of the database's: saves to the same battle, one
+    after another and with someone else saving it too, each go through within a couple of seconds."""
+    out = []
+    for label, shift in (('device clock 10 min behind', 600000), ('device clock 10 min ahead', -600000)):
+        extra = "const __d = __fs.doc.bind(__fs); __fs.doc = p => { const r = __d(p); const a = r.acquire; r.acquire = async o => { const x = await a(o); if (x.expiresAt) x.expiresAt = new Date(Date.parse(x.expiresAt) + %d).toISOString(); return x; }; return r; };" % shift
+        pg = page('claude', extra=extra)
+        bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+        for i, v in enumerate(('ONE', 'TWO', 'THREE')):
+            if i == 2: pg.evaluate('id => { window.__remoteSave("battles/" + id, d => { d.notes = "THEIRS"; }, "lease"); }', bid)
+            pg.evaluate('([id, v]) => { S.battles[id].post = v; save("battles", id); }', [bid, v]); pg.wait_for_timeout(2500)
+            if pg.evaluate('id => window.__store["battles/" + id].post', bid) != v: out.append(f'{label}: save {v} still waiting after 2.5 s ({pg.inner_text("#save-text")!r})')
+        pg.wait_for_timeout(1500)
+        if pg.evaluate('id => window.__store["battles/" + id].notes', bid) != 'THEIRS': out.append(f"{label}: someone else's save was lost")
+        out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -1051,7 +1069,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
          'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys,
          'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore,
-         'stale-browser-copy': t_stale_browser_copy, 'random-edits': t_random_edits}
+         'stale-browser-copy': t_stale_browser_copy, 'random-edits': t_random_edits,
+         'lease-clock': t_lease_clock}
 
 failed = 0
 for name, fn in TESTS.items():

@@ -7,7 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261127214646";</script>
+<script>window.FB_CONFIG = {"apiKey": "AIzaSyBzlJ3VWoea5h9DXxR9F1MjSQWxu5GafVA", "authDomain": "necromunda-long-salvage.firebaseapp.com", "projectId": "necromunda-long-salvage", "storageBucket": "necromunda-long-salvage.firebasestorage.app", "messagingSenderId": "130016889877", "appId": "1:130016889877:web:fa20c31d89bb5757cd121c"}; window.HOSTED_BUILD = "20261127222259";</script>
 <title>Long Salvage Battle Log</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1720,7 +1720,7 @@ const pause = ms => new Promise(ok => setTimeout(ok, ms));
 async function takeLease(ref) {
   const path = ref.path, t0 = Date.now();
   /* (Not when the page is being hidden or closed: then the save must go out at once, and renewing our own lease is instant.) */
-  if (leaseUntil[path] > Date.now() && document.visibilityState !== "hidden") await pause(leaseUntil[path] - Date.now() + 250 + Math.random() * 100);
+  if (leaseUntil[path] > Date.now() && document.visibilityState !== "hidden") await pause(Math.min(LEASE_MS, leaseUntil[path] - Date.now()) + 250 + Math.random() * 100);
   for (let i = 0; Date.now() - t0 < 5000; i++) {
     let r;
     try { r = await ref.acquire({ holder: LEASE_HOLDER, ttlMs: LEASE_MS }); }
@@ -1729,8 +1729,10 @@ async function takeLease(ref) {
       if (["unavailable", "resource_exhausted", "revoked"].includes(e?.code)) throw e;
       return false;   // not offered here (an older runtime, say): save as a plain write
     }
-    if (r?.acquired) { leaseUntil[path] = Date.parse(r.expiresAt) || Date.now() + LEASE_MS; return true; }
-    /* Someone else is saving this record: wait until their lease ends (a moment), then try again. */
+    /* Timed by this device's clock alone: the database's clock may differ from it by minutes. */
+    if (r?.acquired) { leaseUntil[path] = Date.now() + LEASE_MS; return true; }
+    /* Someone else is saving this record: wait until their lease ends (a moment; never more than a lease, whatever the
+       clocks say), then try again. */
     await pause(Math.min(LEASE_MS, Math.max(50, (Date.parse(r?.expiresAt) || 0) - Date.now())) + Math.random() * 150);
   }
   return true;   // still busy after a few seconds: go ahead with a fresh read and merge
