@@ -737,9 +737,13 @@ def t_panels_keyboard():
     bk['gangs']['kyn']['credits'] = 999; bk['gangs']['kyn']['updated'] = '2099-01-01T00:00:00Z'
     path = '/tmp/kb-backup.json'; open(path, 'w').write(json.dumps(bk))
     for how in ('Escape', 'apply'):
-        pg.focus('[data-act=loadBackup]')
-        with pg.expect_file_chooser() as fc: pg.keyboard.press('Enter')
-        fc.value.set_files(path); pg.wait_for_timeout(500)
+        # Enter on Load backup must ask for the file picker; the file is then handed to it directly (headless Chromium
+        # sometimes doesn't report the picker opening, though the page asked for it correctly).
+        pg.evaluate("() => { const fi = document.getElementById('backup-file'); if (fi.__asked !== undefined) return; fi.__asked = 0; const oc = fi.click.bind(fi); fi.click = () => { fi.__asked++; if (navigator.userActivation.isActive) oc(); }; }")
+        pg.focus('[data-act=loadBackup]'); before = pg.evaluate("document.getElementById('backup-file').__asked")
+        pg.keyboard.press('Enter'); pg.wait_for_timeout(200)
+        if pg.evaluate("document.getElementById('backup-file').__asked") != before + 1: out.append(f'backup ({how}): Enter on Load backup did not open the file picker')
+        pg.set_input_files('#backup-file', path); pg.wait_for_timeout(500)
         if not pg.evaluate(inside, '#restore-confirm'): out.append(f'backup ({how}): focus did not move into the compare screen')
         if how == 'Escape':
             pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
@@ -761,6 +765,76 @@ def t_panels_keyboard():
     return out
 
 
+ON_TOP = "sel => { const t = document.querySelector(sel); if (!t || !t.getClientRects().length) return 'not shown'; const r = t.getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, Math.min(r.top + r.height / 2, innerHeight - 2)); return e === t || t.contains(e) ? 'on top' : 'hidden behind ' + ((e && (e.id || e.className)) || '?'); }"
+
+
+def t_print_feedback():
+    """From the print preview: messages show on top of it, and when the browser blocks copying, Copy as text shows the report
+    text, selected, inside the preview. Reopening the preview starts without it. Printing leaves it out."""
+    out = []
+    for mode in ('claude', 'hosted'):
+        pg = page(mode)
+        bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+        pg.evaluate('id => { S.tab = "battles"; S.sel = id; render(); }', bid); pg.wait_for_timeout(200)
+        pg.click('#view [data-act=openPrint]'); pg.wait_for_timeout(200)
+        pg.evaluate('toast("A message")'); pg.wait_for_timeout(100)
+        if pg.evaluate(ON_TOP, '#toast') != 'on top': out.append(f'{mode}: a message is {pg.evaluate(ON_TOP, "#toast")} over the print preview')
+        pg.evaluate("() => { navigator.clipboard.writeText = () => Promise.reject(new Error('blocked')); }")
+        pg.click('#print-overlay [data-act=copyReport]'); pg.wait_for_timeout(300)
+        where = pg.evaluate(ON_TOP, '#print-copybox')
+        if where != 'on top': out.append(f'{mode}: copying blocked, the report text is {where}')
+        else:
+            if pg.evaluate("document.activeElement.id") != 'print-copybox': out.append(f'{mode}: the report text box was not focused')
+            sel = pg.evaluate("(() => { const t = document.getElementById('print-copybox'); return t.selectionEnd - t.selectionStart; })()")
+            if sel < 50 or sel != pg.evaluate("document.getElementById('print-copybox').value.length"): out.append(f'{mode}: the report text was not all selected ({sel})')
+            if 'PRE BATTLE' not in pg.evaluate("document.getElementById('print-copybox').value"): out.append(f'{mode}: the box does not hold the report text')
+        pg.emulate_media(media='print')
+        if pg.evaluate("(() => { const e = document.getElementById('print-copy'); return e.getClientRects().length > 0; })()"): out.append(f'{mode}: the copy box would be printed')
+        pg.emulate_media(media='screen')
+        pg.keyboard.press('Escape'); pg.wait_for_timeout(100)
+        pg.click('#view [data-act=openPrint]'); pg.wait_for_timeout(200)
+        if pg.is_visible('#print-copy'): out.append(f'{mode}: the copy box was still there when the preview was reopened')
+        out += pg.errors; close(pg)
+    return out
+
+
+def t_message_size():
+    """A long message uses the screen's width on a phone (not half of it) and stays a readable width on a large screen."""
+    out = []
+    clash = "Someone else edited this at the same time. Their other changes were merged in; where you both changed the same thing, yours was kept."
+    for w, h in ((320, 640), (390, 844), (1400, 900)):
+        pg = page('claude', width=w, height=h)
+        pg.evaluate('m => toast(m)', clash); pg.wait_for_timeout(100)
+        r = pg.evaluate("(() => { const r = document.getElementById('toast').getBoundingClientRect(); return [r.left, r.right, r.width, r.height]; })()")
+        if r[0] < 8 or r[1] > w - 8: out.append(f'{w}px: the message runs off the screen ({r})')
+        if w < 600 and r[2] < w - 60: out.append(f'{w}px: the message is only {round(r[2])}px wide')
+        if w < 600 and r[3] > 120: out.append(f'{w}px: the message is {round(r[3])}px tall')
+        if w >= 600 and r[2] > 600: out.append(f'{w}px: the message is {round(r[2])}px wide, too wide to read comfortably')
+        out += pg.errors; close(pg)
+    return out
+
+
+def t_sign_out():
+    """Live site: signing out (and Use a different account) clears the copy of the log the browser keeps, then signs out."""
+    out = []
+    pg = page('hosted')
+    pg.evaluate("sessionStorage.removeItem('__fbcalls')")
+    pg.evaluate("document.querySelector('[data-act=signOut]').click()"); pg.wait_for_timeout(1500)
+    calls = pg.evaluate("JSON.parse(sessionStorage.getItem('__fbcalls') || '[]')")
+    if calls[:3] != ['terminate', 'clearPersistence', 'signOut']: out.append(f'Sign out did: {calls}')
+    pg.evaluate("sessionStorage.removeItem('__fbcalls')")
+    pg.evaluate("document.getElementById('gate-other').onclick()"); pg.wait_for_timeout(1500)
+    calls = pg.evaluate("JSON.parse(sessionStorage.getItem('__fbcalls') || '[]')")
+    if calls[:3] != ['terminate', 'clearPersistence', 'signOut']: out.append(f'Use a different account did: {calls}')
+    # clearing fails (another tab still open): signing out still happens
+    pg.evaluate("sessionStorage.removeItem('__fbcalls')")
+    pg.evaluate("() => { const fs = window.firebase.firestore(); fs.clearPersistence = async () => { throw Object.assign(new Error('open elsewhere'), { code: 'failed-precondition' }); }; document.querySelector('[data-act=signOut]').click(); }"); pg.wait_for_timeout(1500)
+    calls = pg.evaluate("JSON.parse(sessionStorage.getItem('__fbcalls') || '[]')")
+    if 'signOut' not in calls: out.append(f'when clearing failed, signing out did not happen: {calls}')
+    out += [e for e in pg.errors if 'open elsewhere' not in e]; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -769,7 +843,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'reconnect': t_reconnect, 'save-error-codes': t_save_error_codes, 'redraw-speed': t_redraw_speed,
          'status-while-saving': t_status_while_saving,
          'odd-records': t_odd_records, 'activity-owner': t_activity_owner,
-         'messages': t_messages, 'panels-keyboard': t_panels_keyboard}
+         'messages': t_messages, 'panels-keyboard': t_panels_keyboard,
+         'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out}
 
 failed = 0
 for name, fn in TESTS.items():

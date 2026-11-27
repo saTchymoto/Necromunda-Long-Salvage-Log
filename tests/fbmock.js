@@ -49,13 +49,16 @@
   });
   const fs = {
     enablePersistence: async () => {},
+    /* Signing out: record what was called (kept across the reload that follows). */
+    terminate: async () => { const c = JSON.parse(sessionStorage.getItem('__fbcalls') || '[]'); c.push('terminate'); sessionStorage.setItem('__fbcalls', JSON.stringify(c)); },
+    clearPersistence: async () => { const c = JSON.parse(sessionStorage.getItem('__fbcalls') || '[]'); c.push('clearPersistence'); sessionStorage.setItem('__fbcalls', JSON.stringify(c)); },
     collection: c => query(c),
     doc: p => docRef(p),
     runTransaction: async fn => { const t = { get: async r => { await sleep(LAT()); return mkdoc(r._path.split('/')[1], store[r._path]); }, sets: [], set(r, d) { this.sets.push([r._path, d]); } };
       await fn(t); await sleep(LAT()); for (const [p, d] of t.sets) write(p, d); }
   };
   const user = { displayName: 'Tester', email: 't@example.com' };
-  const auth = { currentUser: user, onAuthStateChanged: cb => setTimeout(() => cb(user), 0), signInWithPopup: async () => {}, signOut: async () => {} };
+  const auth = { currentUser: user, onAuthStateChanged: cb => setTimeout(() => cb(user), 0), signInWithPopup: async () => {}, signOut: async () => { const c = JSON.parse(sessionStorage.getItem('__fbcalls') || '[]'); c.push('signOut'); sessionStorage.setItem('__fbcalls', JSON.stringify(c)); } };
   const authFn = () => auth; authFn.GoogleAuthProvider = function () { this.setCustomParameters = () => {}; };
   window.firebase = { initializeApp: () => {}, auth: authFn, firestore: () => fs };
 })();

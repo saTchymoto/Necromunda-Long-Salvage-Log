@@ -594,9 +594,11 @@ td.total { font-weight: 600; color: var(--ok); }
 .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--r); display: grid; gap: 10px; justify-items: center; }
 .confirm { display: inline-flex; gap: 6px; align-items: center; font-size: .85rem; }
 #restore-confirm:focus:not(:focus-visible) { outline: none; }
-.toast { cursor: pointer; position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: .88rem; z-index: 20; }
+.toast { cursor: pointer; position: fixed; left: 50%; transform: translateX(-50%); width: max-content; max-width: min(560px, calc(100vw - 32px)); box-sizing: border-box; text-align: center; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: .88rem; z-index: 150; }
 .copybox { width: 100%; min-height: 220px; font-family: var(--font-mono); font-size: .8rem; }
 .mobile-only { display: none; }
+.print-copy { max-width: 210mm; margin: 0 auto 16px; }
+.print-copy[hidden] { display: none; }
 .overlay { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column; }
 .overlay-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding-top: max(10px, env(safe-area-inset-top, 0px)); padding-bottom: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); border-bottom: 1px solid var(--line); background: var(--panel); }
 .overlay-body { flex: 1; overflow: auto; padding-top: 20px; padding-bottom: max(24px, env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
@@ -607,7 +609,7 @@ td.total { font-weight: 600; color: var(--ok); }
   body { background: #ffffff; }
   body.printing > *:not(#print-overlay) { display: none !important; }
   body.printing #print-overlay { position: static; display: block; background: #ffffff; }
-  body.printing .overlay-bar { display: none; }
+  body.printing .overlay-bar, body.printing .print-copy { display: none; }
   body.printing .overlay-body { padding: 0; overflow: visible; }
   body.printing .paper { box-shadow: none; max-width: none; }
   body.printing .rp { padding: 0; }
@@ -727,7 +729,10 @@ td.total { font-weight: 600; color: var(--ok); }
       <button data-act="closePrint">Close</button>
     </span>
   </div>
-  <div class="overlay-body"><div class="paper"><div class="rp" id="print-paper"></div></div></div>
+  <div class="overlay-body">
+    <label class="field print-copy" id="print-copy" hidden>This browser won't let the log copy for you. The report text is selected: copy it with Ctrl+C (⌘C on a Mac), or long-press and choose Copy.<textarea class="copybox" id="print-copybox" readonly></textarea></label>
+    <div class="paper"><div class="rp" id="print-paper"></div></div>
+  </div>
 </div>
 
 <datalist id="post-actions">
@@ -1842,6 +1847,15 @@ function showGate(state) {
     : state === "offline" ? "Couldn't reach the campaign database. Check your connection, then reload the page." : "Sign in with the Google account your campaign organiser added.";
   $("#gate-signin").hidden = state === "denied" || state === "offline"; $("#gate-other").hidden = state !== "denied";
 }
+/* Signing out also clears the copy of the log this browser keeps (so it opens fast and copes with short drops), so nothing of
+   the campaign stays on a shared or borrowed computer. The next sign-in here downloads it again. If another tab of the log is
+   still open the copy can't be cleared; signing out works the same. */
+async function signOutAndForget() {
+  const fb = window.firebase;
+  try { const fs = fb.firestore(); await fs.terminate(); await fs.clearPersistence(); } catch (e) {}
+  try { await fb.auth().signOut(); } catch (e) {}
+  location.reload();
+}
 async function firebaseDb() {
   firebase.initializeApp(window.FB_CONFIG);
   const auth = firebase.auth(), provider = new firebase.auth.GoogleAuthProvider();
@@ -1850,7 +1864,7 @@ async function firebaseDb() {
     if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(e?.code)) await auth.signInWithRedirect(provider);
     else if (e?.code !== "auth/popup-closed-by-user" && e?.code !== "auth/cancelled-popup-request") showGate("error"); } };
   $("#gate-signin").onclick = signIn;
-  $("#gate-other").onclick = async () => { await auth.signOut(); location.reload(); };
+  $("#gate-other").onclick = signOutAndForget;
   const user = await new Promise(ok => auth.onAuthStateChanged(u => { if (u) ok(u); else showGate("signin"); }));
   $("#gate").hidden = true;
   $("#account").hidden = false; $("#account-name").textContent = user.displayName || user.email || "";
@@ -5577,7 +5591,7 @@ function act(a, el) {
   switch (a) {
     case "select": S.sel = id; S.copyText = ""; S.editXp = null; S.composer = null; S.gangPick = null; S.confirmDel = null; S.bottlePick = false; S.newPick = false; render(); window.scrollTo(0, 0); return;
     case "signOut": { const ok = !Object.values(dirty).some(Boolean) || confirm("Some changes are still saving. Sign out anyway?");
-      if (ok) window.firebase?.auth?.().signOut().then(() => location.reload()); return; }
+      if (ok) signOutAndForget(); return; }
     case "reloadApp": location.reload(); return;
     case "listFilter": { const f = new Set(listFilter()); if (!id) f.clear(); else if (f.has(id)) f.delete(id); else f.add(id); setListFilter(f); render();
       document.querySelector(`[data-act="listFilter"][data-id="${id}"]`)?.focus(); return; }
@@ -5838,7 +5852,12 @@ function act(a, el) {
     case "copyReport": {
       const text = reportText(b); S.copyText = text;
       const done = () => { toast("Report copied"); };
-      try { navigator.clipboard.writeText(text).then(done, () => { render(); $("#copybox")?.select(); }); } catch (e) { render(); $("#copybox")?.select(); return; }
+      /* Copying blocked: show the text to copy by hand. From the print preview it goes in the preview (the page behind it can't be seen). */
+      const fail = () => {
+        if ($("#print-overlay").hidden) { render(); $("#copybox")?.select(); return; }
+        $("#print-copybox").value = text; $("#print-copy").hidden = false; $("#print-copybox").focus(); $("#print-copybox").select();
+      };
+      try { navigator.clipboard.writeText(text).then(done, fail); } catch (e) { fail(); return; }
       render(); return;
     }
     case "toggleQuickFighter": S.quickFighter = !S.quickFighter; S.qf = { gang: (b.gangs || [])[0], name: "", role: "ganger" }; render(); $("#qf-name")?.focus(); return;
@@ -6013,6 +6032,7 @@ let printOpener = null;
 function openPrint(b, all = false) {
   if ($("#print-overlay").hidden) { const ae = document.activeElement; printOpener = ae && ae !== document.body ? ae : null; }
   S.printAll = isPC(b) && all;
+  $("#print-copy").hidden = true; $("#print-copybox").value = "";
   if (!document.getElementById("report-css")) { const st = document.createElement("style"); st.id = "report-css"; st.textContent = REPORT_CSS; document.head.appendChild(st); }
   $("#print-paper").innerHTML = reportBody(b);
   $("#print-title").textContent = `${isPC(b) ? (S.printAll ? "Post-cycle report, all gangs" : `Post-cycle report, ${pcGang(b)?.short || pcGang(b)?.name || ""}`) : "Battle report"} · ${fmtDate(b.date)}`;
