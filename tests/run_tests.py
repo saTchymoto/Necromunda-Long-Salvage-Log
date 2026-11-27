@@ -868,6 +868,53 @@ def t_claude_no_db():
     return out
 
 
+def t_no_access():
+    """Claude copy refused access before the log loaded: a screen saying so with Reload, not "Loading…" for ever. Losing access
+    once the log is showing keeps it on screen, marked read-only."""
+    out = []
+    refuse = """const __c = __fs.collection.bind(__fs); __fs.collection = n => { const q = __c(n); q.onSnapshot = (ok, bad) => { setTimeout(() => bad(Object.assign(new Error('no'), { code: '%s' })), 50); return () => {}; }; return q; };"""
+    for code in ('not_granted', 'revoked'):
+        pg = page('claude', extra=refuse % code); pg.wait_for_timeout(800)
+        if not pg.is_visible('#gate'): out.append(f'{code} on opening: no screen ({pg.inner_text("#view")[:40]!r}, status {pg.inner_text("#save-text")!r})')
+        else:
+            if "don't have access" not in pg.inner_text('#gate-text'): out.append(f'{code}: the screen says {pg.inner_text("#gate-text")!r}')
+            if not pg.is_visible('#gate-reload') or pg.is_visible('#gate-signin'): out.append(f'{code}: Reload missing or sign-in shown')
+        out += pg.errors; close(pg)
+    pg = page('claude'); pg.evaluate("window.__endListeners('battles', 'revoked')"); pg.wait_for_timeout(500)
+    if pg.is_visible('#gate'): out.append('losing access part-way through hid the log')
+    if 'Read-only' not in pg.inner_text('#save-text'): out.append(f'losing access part-way through: status {pg.inner_text("#save-text")!r}')
+    out += pg.errors; close(pg)
+    return out
+
+
+def t_tab_keys():
+    """The tab bar behaves like tabs: Left/Right (wrapping) and Home/End move between tabs and open them, only the selected tab
+    is a Tab stop, and the content is labelled by the selected tab. Clicking still works."""
+    out = []
+    pg = page('claude')
+    names = pg.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].map(b => b.dataset.tab)")
+    state = lambda: pg.evaluate("[S.tab, document.activeElement.dataset.tab, document.getElementById('view').getAttribute('aria-labelledby'), [...document.querySelectorAll('#tabs [role=tab]')].filter(b => b.tabIndex === 0).map(b => b.dataset.tab), document.querySelector('#tabs [aria-selected=true]').dataset.tab]")
+    def expect(t, how):
+        st = state()
+        if st != [t, t, 'tab-' + t, [t], t]: out.append(f'{how}: expected {t}, got {st}')
+    pg.evaluate("openTab('battles')"); pg.focus('#tab-battles')
+    pg.keyboard.press('ArrowRight'); expect(names[1], 'Right')
+    pg.keyboard.press('ArrowLeft'); expect(names[0], 'Left')
+    pg.keyboard.press('ArrowLeft'); expect(names[-1], 'Left from the first wraps')
+    pg.keyboard.press('ArrowRight'); expect(names[0], 'Right from the last wraps')
+    pg.keyboard.press('End'); expect(names[-1], 'End')
+    pg.keyboard.press('Home'); expect(names[0], 'Home')
+    if pg.evaluate("document.getElementById('view').getAttribute('role')") != 'tabpanel': out.append('the content is not marked as the tab panel')
+    if pg.evaluate("[...document.querySelectorAll('#tabs [role=tab]')].some(b => b.getAttribute('aria-controls') !== 'view' || !document.getElementById(b.id) || b.id !== 'tab-' + b.dataset.tab)"): out.append('a tab is not linked to the content')
+    pg.click('#tab-territories'); pg.wait_for_timeout(100)
+    if pg.evaluate('S.tab') != 'territories' or pg.evaluate("document.getElementById('view').getAttribute('aria-labelledby')") != 'tab-territories': out.append('clicking a tab no longer opens it')
+    # arrow keys inside the content don't move tabs
+    pg.evaluate("openTab('gangs')"); pg.focus('#view input, #view textarea, #view select'); pg.keyboard.press('ArrowRight')
+    if pg.evaluate('S.tab') != 'gangs': out.append('arrow keys in a field changed the tab')
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -878,7 +925,7 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'odd-records': t_odd_records, 'activity-owner': t_activity_owner,
          'messages': t_messages, 'panels-keyboard': t_panels_keyboard,
          'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
-         'claude-no-db': t_claude_no_db}
+         'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys}
 
 failed = 0
 for name, fn in TESTS.items():

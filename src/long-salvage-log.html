@@ -707,16 +707,16 @@ td.total { font-weight: 600; color: var(--ok); }
     <div class="confirm" id="restore-confirm" hidden style="flex-basis:100%;justify-content:flex-end"></div>
   </header>
   <div class="gang-strip" id="gang-strip"></div>
-  <nav class="tabs" role="tablist" id="tabs">
-    <button role="tab" data-tab="battles" aria-selected="true">Battles &amp; Cycles</button>
-    <button role="tab" data-tab="gangs" aria-selected="false">Gangs &amp; fighters</button>
-    <button role="tab" data-tab="npcs" aria-selected="false">NPCs</button>
-    <button role="tab" data-tab="territories" aria-selected="false">Territories &amp; Map</button>
-    <button role="tab" data-tab="equipment" aria-selected="false">Equipment Lists &amp; Trading Post</button>
-    <!-- Rules reference stays the right-most tab: add new tabs before it. -->
-    <button role="tab" data-tab="rules" aria-selected="false">Rules reference</button>
+  <nav class="tabs" role="tablist" id="tabs" aria-label="Sections of the log">
+    <button role="tab" id="tab-battles" aria-controls="view" data-tab="battles" aria-selected="true">Battles &amp; Cycles</button>
+    <button role="tab" id="tab-gangs" aria-controls="view" data-tab="gangs" aria-selected="false" tabindex="-1">Gangs &amp; fighters</button>
+    <button role="tab" id="tab-npcs" aria-controls="view" data-tab="npcs" aria-selected="false" tabindex="-1">NPCs</button>
+    <button role="tab" id="tab-territories" aria-controls="view" data-tab="territories" aria-selected="false" tabindex="-1">Territories &amp; Map</button>
+    <button role="tab" id="tab-equipment" aria-controls="view" data-tab="equipment" aria-selected="false" tabindex="-1">Equipment Lists &amp; Trading Post</button>
+    <!-- Rules reference stays the right-most tab: add new tabs before it (with an id "tab-<name>" and aria-controls="view"). -->
+    <button role="tab" id="tab-rules" aria-controls="view" data-tab="rules" aria-selected="false" tabindex="-1">Rules reference</button>
   </nav>
-  <main id="view"><div class="empty" style="margin-top:18px">Loading the campaign log…</div></main>
+  <main id="view" role="tabpanel" aria-labelledby="tab-battles"><div class="empty" style="margin-top:18px">Loading the campaign log…</div></main>
 </div>
 <div class="toast" id="toast" hidden title="Click to dismiss"></div>
 <div class="sr-only" id="sr-status" role="status" aria-live="polite"></div>
@@ -1846,10 +1846,11 @@ function showGate(state) {
   $("#gate-text").textContent = state === "denied" ? `${who || "This account"} doesn't have access to this log. Ask the campaign organiser to add it, or sign in with another account.`
     : state === "error" ? "Couldn't sign in. Check your connection and try again."
     : state === "offline" ? "Couldn't reach the campaign database. Check your connection, then reload the page."
+    : state === "noaccess" ? "You don't have access to this log. Ask its owner to share it with you, then reload the page."
     : state === "claude" ? "Couldn't reach the campaign's shared database, so the log can't be shown here. Reload the page. If it keeps happening, check that you're signed in to Claude and can open this log."
     : "Sign in with the Google account your campaign organiser added.";
   $("#gate-signin").hidden = state !== "signin" && state !== "error"; $("#gate-other").hidden = state !== "denied";
-  $("#gate-reload").hidden = state !== "offline" && state !== "claude";
+  $("#gate-reload").hidden = !["offline", "claude", "noaccess"].includes(state);
 }
 /* Signing out also clears the copy of the log this browser keeps (so it opens fast and copes with short drops), so nothing of
    the campaign stays on a shared or borrowed computer. The next sign-in here downloads it again. If another tab of the log is
@@ -1920,7 +1921,12 @@ async function boot() {
         }, e => {
           if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
           live[name] = false;
-          if (["revoked", "not_granted", "capability_disabled", "capability_removed"].includes(e?.code)) { accessLost = true; setSave("", ""); return; }
+          if (["revoked", "not_granted", "capability_disabled", "capability_removed"].includes(e?.code)) {
+            accessLost = true;
+            /* Refused before the log had loaded: there's nothing to show read-only, so say so plainly. */
+            if (!S.loaded) { showGate("noaccess"); return; }
+            setSave("", ""); return;
+          }
           setSave("", "");
           tries++; setTimeout(sub, Math.min(60000, 2000 * 2 ** (tries - 1)));
         });
@@ -2057,7 +2063,9 @@ function render() {
   /* The gang strip is drawn outside the main safety net below, so it gets its own: if something in the saved data stops
      it drawing, leave the strip empty and still show the rest of the log. */
   try { renderStrip(); } catch (e) { console.error(e); const st = $("#gang-strip"); if (st) st.innerHTML = ""; }
-  for (const b of document.querySelectorAll("#tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === S.tab));
+  /* Tabs: the selected one is the one Tab stops on (arrow keys move between them), and the content is labelled by it. */
+  for (const b of document.querySelectorAll("#tabs button")) { const on = b.dataset.tab === S.tab; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
+  $("#view").setAttribute("aria-labelledby", "tab-" + S.tab);
   const v = $("#view");
   const ae = document.activeElement;
   const keepFocus = ae?.id;
@@ -5590,7 +5598,16 @@ document.addEventListener("keydown", ev => {
 document.addEventListener("click", ev => {
   if (S.mapMenu && !ev.target.closest(".mg-wrap")) { S.mapMenu = null; if (!ev.target.closest("[data-act],[data-tab]")) { render(); return; } }
   const t = ev.target.closest("[data-act]"); if (t) { ev.preventDefault(); act(t.dataset.act, t); return; }
-  const tab = ev.target.closest("[data-tab]"); if (tab) { S.tab = tab.dataset.tab; S.copyText = ""; if (S.tab === "rules") S.rulesView = ""; render(); }
+  const tab = ev.target.closest("[data-tab]"); if (tab) openTab(tab.dataset.tab);
+});
+function openTab(t) { S.tab = t; S.copyText = ""; if (S.tab === "rules") S.rulesView = ""; render(); }
+/* The tab bar: Left/Right move to the previous/next tab (wrapping round), Home/End to the first/last, and open it. */
+document.addEventListener("keydown", ev => {
+  const t = ev.target.closest?.('#tabs [role="tab"]'); if (!t || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+  const all = [...document.querySelectorAll('#tabs [role="tab"]')], i = all.indexOf(t);
+  const j = ev.key === "ArrowRight" ? (i + 1) % all.length : ev.key === "ArrowLeft" ? (i - 1 + all.length) % all.length : ev.key === "Home" ? 0 : ev.key === "End" ? all.length - 1 : -1;
+  if (j < 0) return;
+  ev.preventDefault(); openTab(all[j].dataset.tab); all[j].focus();
 });
 
 function act(a, el) {
