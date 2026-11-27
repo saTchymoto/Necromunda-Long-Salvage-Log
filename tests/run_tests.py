@@ -482,7 +482,7 @@ def t_failed_save():
         if pg.evaluate(warns): out.append(f'{mode}: closing still warns after everything saved')
         pg.evaluate(FAIL_JS, ['internal', 1])
         pg.evaluate('id => { S.battles[id].post = "AGAIN"; save("battles", id); }', bid); pg.wait_for_timeout(1200)
-        if pg.is_visible('#save-retry'): pg.click('#save-retry'); pg.wait_for_timeout(800)
+        if pg.is_visible('#save-retry'): pg.click('#save-retry'); pg.wait_for_timeout(2500)  # Claude copy: may wait for its own lease to lapse
         if dbv() != 'AGAIN': out.append(f'{mode}: Retry now did not save')
         pg.evaluate(FAIL_JS, ['permission-denied', 1])
         pg.evaluate('id => { S.battles[id].post = "NOPE"; save("battles", id); }', bid); pg.wait_for_timeout(4500)
@@ -985,6 +985,60 @@ def t_stale_browser_copy():
     return out
 
 
+def t_random_edits():
+    """Two people editing the same battles at once, at random moments and with a slow database: my edits and theirs (to
+    different fields) all survive, in the database and on screen, on the live site and in the Claude copy. "They" save the
+    way another copy of the log does (a transaction on the live site, a lease in the Claude copy)."""
+    import random
+    out = []
+    MINE, THEIRS = ['post', 'pre'], ['notes', 'treachResult']
+    for mode in ('hosted', 'claude'):
+        for seed in (10, 11, 12):
+            rnd = random.Random(seed); pg = page(mode); pg.evaluate(f'window.__lat = {rnd.choice([200, 400])}')
+            bids = pg.evaluate('Object.keys(S.battles).filter(id => !isPC(S.battles[id])).slice(0, 3)')
+            want = {}
+            for step in range(36):
+                b = rnd.choice(bids)
+                if rnd.random() < 0.5:
+                    f = rnd.choice(MINE); want[(b, f)] = v = f'L{step}'
+                    pg.evaluate('([b, f, v]) => { S.battles[b][f] = v; save("battles", b); }', [b, f, v])
+                else:
+                    f = rnd.choice(THEIRS); want[(b, f)] = v = f'R{step}'
+                    pg.evaluate('([b, f, v, how]) => { window.__remoteSave("battles/" + b, d => { d[f] = v; d.updated = new Date().toISOString(); }, how); }', [b, f, v, 'lease' if mode == 'claude' else 'tx'])
+                pg.wait_for_timeout(rnd.choice([0, 5, 30, 120, 400, 700]))
+            # let both sides finish saving (the test saves far faster than people type, so queues build up)
+            for _ in range(60):
+                if pg.evaluate('window.__remotePending === 0 && !Object.values(dirty).some(Boolean)'): break
+                pg.wait_for_timeout(1000)
+            pg.wait_for_timeout(1500)
+            lost = []
+            for (b, f), v in want.items():
+                got_db = pg.evaluate('([b, f]) => window.__store["battles/" + b][f]', [b, f]); got_screen = pg.evaluate('([b, f]) => S.battles[b][f]', [b, f])
+                if got_db != v or got_screen != v: lost.append(f'{b}.{f} wanted {v}: database {got_db}, screen {got_screen}')
+            if lost: out.append(f'{mode} seed {seed}: {len(lost)} edit(s) lost: {lost[:3]}')
+            if pg.inner_text('#save-text') != 'All changes saved': out.append(f'{mode} seed {seed}: status {pg.inner_text("#save-text")!r}')
+            out += pg.errors; close(pg)
+    # Claude copy where leases aren't offered: saving still works, as a plain write; a brand-new record is written straight away
+    pg = page('claude', extra='const __d = __fs.doc.bind(__fs); __fs.doc = p => { const r = __d(p); delete r.acquire; return r; };')
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    pg.evaluate('id => { S.battles[id].post = "NO LEASE"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+    if pg.evaluate('id => window.__store["battles/" + id].post', bid) != 'NO LEASE': out.append('without leases, a save did not reach the database')
+    out += pg.errors; close(pg)
+    # hiding the page right after a save still saves at once (no waiting for this browser's own lease to lapse)
+    pg = page('claude')
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    pg.evaluate('id => { S.battles[id].post = "FIRST"; save("battles", id); }', bid); pg.wait_for_timeout(900)
+    pg.evaluate('id => { S.battles[id].post = "THEN HIDDEN"; save("battles", id); Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true }); Object.defineProperty(document, "hidden", { value: true, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); }', bid)
+    pg.wait_for_timeout(500)
+    if pg.evaluate('id => window.__store["battles/" + id].post', bid) != 'THEN HIDDEN': out.append('hiding the page right after a save did not save at once')
+    out += pg.errors; close(pg)
+    pg = page('claude')
+    pg.evaluate('() => { S.battles["b-brand-new"] = { id: "b-brand-new", date: "2026-11-27", gangs: ["kyn", "fangs"], events: [] }; save("battles", "b-brand-new"); }'); pg.wait_for_timeout(1500)
+    if not pg.evaluate('!!window.__store["battles/b-brand-new"]'): out.append('a new battle was not saved')
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -997,7 +1051,7 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
          'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys,
          'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore,
-         'stale-browser-copy': t_stale_browser_copy}
+         'stale-browser-copy': t_stale_browser_copy, 'random-edits': t_random_edits}
 
 failed = 0
 for name, fn in TESTS.items():

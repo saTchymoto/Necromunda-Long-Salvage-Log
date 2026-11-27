@@ -1696,6 +1696,32 @@ function save(kind, id) {
   clearTimeout(timers[path]);
   timers[path] = setTimeout(() => flush(path), 650);
 }
+/* The Claude copy's database has no transactions, but it can lend a record to one writer for a moment (a lease). Saves take
+   turns through it: take the lease, read what's there now, merge, write. Other copies of the log do the same, so two people
+   saving the same record at the same moment both keep their changes, as on the live site. A lease lapses by itself (there's
+   no release). To take turns fairly, this browser lets its own lease on a record lapse before taking it again, a moment later
+   than anyone already waiting would. If the record stays busy for a few seconds, the save goes ahead anyway with a fresh read
+   and merge. Returns false only where leases aren't offered, so the save goes ahead as before. */
+const LEASE_HOLDER = uid("tab"), LEASE_MS = 1000, leaseUntil = {};   // the shortest lease the database gives
+const pause = ms => new Promise(ok => setTimeout(ok, ms));
+async function takeLease(ref) {
+  const path = ref.path, t0 = Date.now();
+  /* (Not when the page is being hidden or closed: then the save must go out at once, and renewing our own lease is instant.) */
+  if (leaseUntil[path] > Date.now() && document.visibilityState !== "hidden") await pause(leaseUntil[path] - Date.now() + 250 + Math.random() * 100);
+  for (let i = 0; Date.now() - t0 < 5000; i++) {
+    let r;
+    try { r = await ref.acquire({ holder: LEASE_HOLDER, ttlMs: LEASE_MS }); }
+    catch (e) {
+      if (e?.code === "unavailable" && i < 1) { await pause(400 + Math.random() * 400); continue; }
+      if (["unavailable", "resource_exhausted", "revoked"].includes(e?.code)) throw e;
+      return false;   // not offered here (an older runtime, say): save as a plain write
+    }
+    if (r?.acquired) { leaseUntil[path] = Date.parse(r.expiresAt) || Date.now() + LEASE_MS; return true; }
+    /* Someone else is saving this record: wait until their lease ends (a moment), then try again. */
+    await pause(Math.min(LEASE_MS, Math.max(50, (Date.parse(r?.expiresAt) || 0) - Date.now())) + Math.random() * 150);
+  }
+  return true;   // still busy after a few seconds: go ahead with a fresh read and merge
+}
 function flush(path) {
   delete timers[path];
   const [kind, id] = path.split("/");
@@ -1730,6 +1756,26 @@ function flush(path) {
            meanwhile when the connection comes back. Keep it unsaved; it's retried, merged, once the database answers. */
         throw e;
       }
+    }
+    /* Claude copy, a record already in the database: take turns through a lease, then read, merge and write. A record that
+       isn't in the database yet is simply written (nobody else can have changed it). */
+    if (!HOSTED && obj && lastKnown[path] && typeof ref.acquire === "function" && await takeLease(ref)) {
+      const lk0 = lastKnown[path];
+      const snap = await ref.get(), remote = snap.exists ? JSON.parse(JSON.stringify(snap.data())) : null;
+      const mine = JSON.parse(JSON.stringify(S[kind][id] || obj));
+      const merged = remote && lastKnown[path] ? merge3(JSON.parse(lastKnown[path]), mine, remote) : mine;
+      const sentM = JSON.stringify(merged), mergedStable = sentStable[path] = stable(merged);
+      const put = () => ref.set(JSON.parse(sentM));
+      try { await put(); } catch (e) { if (e && e.code === "unavailable") { await new Promise(r => setTimeout(r, 600 + Math.random() * 600)); await put(); } else throw e; }
+      /* As on the live site: if a newer version arrived meanwhile it has been merged in already; otherwise take in only what
+         the other side changed, keeping anything typed here while the save was on its way. */
+      const now = lastKnown[path];
+      if (now !== lk0 && (!now || stable(JSON.parse(now)) !== mergedStable)) return;
+      lastKnown[path] = JSON.stringify(mine);
+      const took = S[kind][id] ? mergeRemote(kind, id, path, JSON.parse(sentM)) : false;
+      lastKnown[path] = sentM; forgetSent(path);
+      if (took) { if (kind === "gangs") reindex(); after("rerender-soft"); }
+      return;
     }
     /* Not receiving live updates right now: read the record first and merge, so a change someone else made meanwhile isn't
        overwritten. (Normally their changes have already arrived and been merged into ours.) */
