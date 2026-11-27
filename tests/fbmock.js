@@ -4,6 +4,7 @@
 (() => {
   const store = window.__store = {}; // path -> data
   const listeners = {}; // coll -> [fn]
+  const started = {}; // coll -> how many listeners have been started on it
   const LAT = () => window.__lat ?? 30;
   const clone = v => v == null ? v : JSON.parse(JSON.stringify(v));
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -36,8 +37,17 @@
       for (const [f, op, v] of filters) docs = docs.filter(d => op === '<' ? d.data()[f] < v : op === '>' ? d.data()[f] > v : d.data()[f] === v);
       if (order) docs.sort((a, b) => (a.data()[order[0]] > b.data()[order[0]] ? 1 : -1) * (order[1] === 'desc' ? -1 : 1));
       { const ds = docs.slice(0, lim); return { docs: ds, empty: !ds.length, size: ds.length }; } },
-    onSnapshot: (fn, err) => { const L = { fn: s => { if (!L.dead) fn(s); }, err }; (listeners[coll] ||= []).push(L.fn); (window.__listeners[coll] ||= []).push(L);
+    onSnapshot: (...args) => { const opts = typeof args[0] === 'function' ? {} : args.shift() || {}; const [fn, err] = args;
+      const L = { fn: s => { if (!L.dead) fn(s); }, err }; (listeners[coll] ||= []).push(L.fn); (window.__listeners[coll] ||= []).push(L);
+      const nth = started[coll] = (started[coll] || 0) + 1;
       setTimeout(() => { const all = Object.entries(store).filter(([p]) => p.split('/')[0] === coll).map(([p, d]) => mkdoc(p.split('/')[1], d));
+        /* window.__firestoreCache: behave like Firebase keeping its copy in the browser. A listener started again hands back
+           the browser's copy first (fromCache), and when the server finds nothing changed it only says so if the listener
+           asked for includeMetadataChanges (as Firestore's event_manager.ts shouldRaiseEvent does). */
+        if (window.__firestoreCache && nth > 1) {
+          L.fn({ docs: all, metadata: { fromCache: true }, docChanges: () => [] });
+          if (opts.includeMetadataChanges) setTimeout(() => L.fn({ docs: all, metadata: { fromCache: false }, docChanges: () => [] }), 300);
+          return; }
         /* window.__pagedNext[coll]: this listener delivers in two pages, as the Claude database may: a partial first page
            flagged fromCache, then the rest. */
         if ((window.__pagedNext || {})[coll]) { delete window.__pagedNext[coll]; const half = all.slice(0, Math.ceil(all.length / 3)), rest = all.slice(half.length);

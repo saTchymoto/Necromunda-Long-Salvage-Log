@@ -1522,6 +1522,7 @@ async function gzipText(text) {
   return b64of(await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
 }
 async function gunzipText(b64) {
+  if (!window.DecompressionStream) throw Object.assign(new Error("This browser can't unpack restore points"), { tooOld: true });
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
 }
@@ -1563,7 +1564,7 @@ async function loadRestorePoint(id) {
     const applied = Array.isArray(r.applied) ? r.applied : ROSTER_PATCHES.filter(p => p.id.slice(0, 10) <= id).map(p => p.id);
     const d = { app: "long-salvage-log", version: 1, saved: r.saved, restorePoint: id, gangs: data.gangs || {}, battles: data.battles || {}, territories: data.territories || {}, config: { applied } };
     upgradeBackup(d); renderRestore(d);
-  } catch (e) { toast("Couldn't open that restore point"); }
+  } catch (e) { toast(e?.tooOld ? "This browser is too old to open restore points. Update it (on an iPhone or iPad: iOS 16.4 or later) or use another device." : "Couldn't open that restore point"); }
 }
 function runOnlinePatches() {
   if (onlinePatched || S.mode !== "db" || !S.loaded || !S.territories._meta) return;
@@ -1913,12 +1914,16 @@ async function boot() {
       const sub = () => {
         let catchingUp = !live[name];
         if (stop) { try { stop(); } catch (e) {} }
-        stop = db.collection(name).onSnapshot(s => {
+        /* Firebase, keeping its copy in the browser, first hands back that copy after a restart; when the server then finds
+           nothing changed it only says so to listeners that ask for it (includeMetadataChanges), so ask. Those extra
+           deliveries carry no changed records. The Claude database takes no options. */
+        const onNext = s => {
           handler(s);
           /* Back after a gap. A delivery flagged fromCache may be only the first page (or a cached view), so wait for one
              the database marks as final before treating anything missing from it as deleted, and before saying all's well. */
           if (catchingUp && !s.metadata?.fromCache) { catchingUp = false; tries = 0; dropRemovedWhileAway(name, s); live[name] = true; savedIfDone(); }
-        }, e => {
+        };
+        const onErr = e => {
           if (e?.code === "permission-denied" && HOSTED) return showGate("denied");
           live[name] = false;
           if (["revoked", "not_granted", "capability_disabled", "capability_removed"].includes(e?.code)) {
@@ -1929,7 +1934,8 @@ async function boot() {
           }
           setSave("", "");
           tries++; setTimeout(sub, Math.min(60000, 2000 * 2 ** (tries - 1)));
-        });
+        };
+        stop = HOSTED ? db.collection(name).onSnapshot({ includeMetadataChanges: true }, onNext, onErr) : db.collection(name).onSnapshot(onNext, onErr);
       };
       sub();
     };

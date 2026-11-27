@@ -224,14 +224,14 @@ def t_map_setup():
     delay_real = """(() => { const fs = window.firebase.firestore(), orig = fs.collection; let first = true;
       const terr = Object.fromEntries(Object.entries(window.__store).filter(([k]) => k.startsWith('territories/')));
       fs.collection = c => { const q = orig(c); if (c !== 'territories' || !first) return q; first = false;
-        return { ...q, onSnapshot: fn => { setTimeout(() => fn({ metadata: { fromCache: true }, docChanges: () => [] }), 5);
+        return { ...q, onSnapshot: (...a) => { const fn = a.find(x => typeof x === 'function'); setTimeout(() => fn({ metadata: { fromCache: true }, docChanges: () => [] }), 5);
           setTimeout(() => fn({ metadata: { fromCache: false }, docChanges: () => Object.entries(terr).map(([k, v]) => ({ type: 'added', doc: { id: k.split('/')[1], exists: true, data: () => JSON.parse(JSON.stringify(v)) } })) }), 900);
           return () => {}; } }; };
       window.firebase.firestore = () => fs; })();"""
     empty = """(() => { for (const k of Object.keys(window.__store)) if (k.startsWith('territories/')) delete window.__store[k];
       const fs = window.firebase.firestore(), orig = fs.collection; let first = true;
       fs.collection = c => { const q = orig(c); if (c !== 'territories' || !first) return q; first = false;
-        return { ...q, onSnapshot: fn => { setTimeout(() => fn({ metadata: { fromCache: true }, docChanges: () => [] }), 5); return () => {}; } }; };
+        return { ...q, onSnapshot: (...a) => { const fn = a.find(x => typeof x === 'function'); setTimeout(() => fn({ metadata: { fromCache: true }, docChanges: () => [] }), 5); return () => {}; } }; };
       window.firebase.firestore = () => fs; })();"""
     out = []
     for label, extra, want_seed in (('empty cache, real map in the database', delay_real, False), ('empty cache, empty database', empty, True), ('normal load', '', False)):
@@ -915,6 +915,44 @@ def t_tab_keys():
     return out
 
 
+def t_firestore_restart():
+    """Live site, with the stand-in behaving like Firebase keeping its copy in the browser: after a live connection is cut off
+    and started again with nothing changed meanwhile, the status goes back to "All changes saved"; changes still arrive and
+    saves still work. The Claude copy is unaffected."""
+    out = []
+    pg = page('hosted', extra='window.__firestoreCache = true;')
+    bid = pg.evaluate('Object.keys(S.battles).find(id => !isPC(S.battles[id]))')
+    for coll in ('battles', 'gangs'):
+        pg.evaluate('c => window.__endListeners(c, "internal")', coll); pg.wait_for_timeout(300)
+        if 'Not up to date' not in pg.inner_text('#save-text'): out.append(f'{coll}: cut off, the status says {pg.inner_text("#save-text")!r}')
+        pg.wait_for_timeout(4000)
+        if pg.inner_text('#save-text') != 'All changes saved' or not pg.evaluate('c => live[c]', coll): out.append(f'{coll}: 4 s after starting again the status says {pg.inner_text("#save-text")!r}')
+    pg.evaluate("""id => { const d = JSON.parse(JSON.stringify(window.__store['battles/' + id])); d.pre = 'THEIRS-AFTER'; window.__remoteWrite('battles/' + id, d); }""", bid); pg.wait_for_timeout(300)
+    if pg.evaluate('id => S.battles[id].pre', bid) != 'THEIRS-AFTER': out.append("someone else's change didn't arrive after starting again")
+    pg.evaluate('id => { S.battles[id].post = "MINE-AFTER"; save("battles", id); }', bid); pg.wait_for_timeout(1500)
+    if pg.evaluate("id => window.__store['battles/' + id].post", bid) != 'MINE-AFTER': out.append("a save after starting again didn't reach the database")
+    if pg.inner_text('#save-text') != 'All changes saved': out.append(f'after saving: {pg.inner_text("#save-text")!r}')
+    out += pg.errors; close(pg)
+    return out
+
+
+def t_old_safari_restore():
+    """A browser that can't unpack restore points (Safari before 16.4) says so plainly instead of a bare "Couldn't open"."""
+    out = []
+    pg = page('hosted')
+    pg.evaluate('async () => { rpMade = false; await makeRestorePoint(); }')
+    rid = pg.evaluate('Object.keys(window.__store).find(k => k.startsWith("restorepoints/"))')
+    if not rid or 'gz' not in pg.evaluate('k => window.__store[k]', rid): out.append('no packed restore point to try'); close(pg); return out
+    pg.evaluate('() => { delete window.DecompressionStream; }')
+    pg.evaluate('showRestorePoints()'); pg.wait_for_timeout(500)
+    pg.click('#restore-confirm [data-act=rpLoad]'); pg.wait_for_timeout(400)
+    t = pg.inner_text('#toast')
+    if 'too old to open restore points' not in t: out.append(f'the message was {t!r}')
+    if pg.evaluate('pendingRestore !== null'): out.append('a restore was set up anyway')
+    out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -925,7 +963,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'odd-records': t_odd_records, 'activity-owner': t_activity_owner,
          'messages': t_messages, 'panels-keyboard': t_panels_keyboard,
          'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
-         'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys}
+         'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys,
+         'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore}
 
 failed = 0
 for name, fn in TESTS.items():
