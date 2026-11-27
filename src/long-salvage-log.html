@@ -683,6 +683,7 @@ td.total { font-weight: 600; color: var(--ok); }
     <p id="gate-text">Sign in with the Google account your campaign organiser added.</p>
     <button class="primary" id="gate-signin">Sign in with Google</button>
     <button class="ghost" id="gate-other" hidden>Use a different account</button>
+    <button class="primary" id="gate-reload" data-act="reloadApp" hidden>Reload</button>
   </div>
 </div>
 <div class="wrap">
@@ -1844,8 +1845,11 @@ function showGate(state) {
   const who = window.firebase?.auth?.().currentUser?.email || "";
   $("#gate-text").textContent = state === "denied" ? `${who || "This account"} doesn't have access to this log. Ask the campaign organiser to add it, or sign in with another account.`
     : state === "error" ? "Couldn't sign in. Check your connection and try again."
-    : state === "offline" ? "Couldn't reach the campaign database. Check your connection, then reload the page." : "Sign in with the Google account your campaign organiser added.";
-  $("#gate-signin").hidden = state === "denied" || state === "offline"; $("#gate-other").hidden = state !== "denied";
+    : state === "offline" ? "Couldn't reach the campaign database. Check your connection, then reload the page."
+    : state === "claude" ? "Couldn't reach the campaign's shared database, so the log can't be shown here. Reload the page. If it keeps happening, check that you're signed in to Claude and can open this log."
+    : "Sign in with the Google account your campaign organiser added.";
+  $("#gate-signin").hidden = state !== "signin" && state !== "error"; $("#gate-other").hidden = state !== "denied";
+  $("#gate-reload").hidden = state !== "offline" && state !== "claude";
 }
 /* Signing out also clears the copy of the log this browser keeps (so it opens fast and copes with short drops), so nothing of
    the campaign stays on a shared or borrowed computer. The next sign-in here downloads it again. If another tab of the log is
@@ -1892,6 +1896,9 @@ async function boot() {
   } catch (e) { db = null; }
   /* The hosted version never falls back to saving in this browser only: without the database, nothing would be shared. */
   if (HOSTED && !db) { showGate("offline"); return; }
+  /* Nor does the Claude copy: its log lives in the shared database, and saving in this browser instead would look the same
+     while nothing reached the others (and it wouldn't be there next time). Only the laptop copy saves in the browser. */
+  if (!db && window.claude && typeof window.claude.use === "function") { showGate("claude"); return; }
   if (db) {
     S.mode = "db"; setSave("busy", "Loading…");
     $("#backup-tools").hidden = false;

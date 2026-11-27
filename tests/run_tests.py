@@ -646,8 +646,11 @@ def t_odd_records():
     bk['battles']['b-null'] = None; bk['gangs']['g-text'] = 'just text'
     path = '/tmp/odd-backup.json'; open(path, 'w').write(json.dumps(bk))
     pg = page('local')
-    with pg.expect_file_chooser() as fc: pg.evaluate("document.querySelector('[data-act=loadBackup]').click()")
-    fc.value.set_files(path); pg.wait_for_timeout(400)
+    # Load backup must ask for the file picker; the file is then handed to it directly (headless Chromium sometimes doesn't
+    # report the picker opening, though the page asked for it correctly).
+    asked = pg.evaluate("() => { const fi = document.getElementById('backup-file'); let n = 0; fi.click = () => { n++; }; document.querySelector('[data-act=loadBackup]').click(); return n; }")
+    if asked != 1: out.append('odd backup: Load backup did not open the file picker')
+    pg.set_input_files('#backup-file', path); pg.wait_for_timeout(400)
     if not pg.is_visible('#restore-confirm'): out.append('odd backup: the compare screen did not open')
     else:
         pg.click('[data-act=replaceRestore]'); pg.wait_for_timeout(400); check(pg, 'odd backup loaded')
@@ -835,6 +838,36 @@ def t_sign_out():
     return out
 
 
+def t_claude_no_db():
+    """Claude copy that can't reach its database (not signed in, not allowed, or no answer in time): a clear screen with a
+    Reload button, never an empty log that saves in this browser. The live site's own offline screen has Reload too."""
+    out = []
+    for label, use in (('database refused', 'async n => null'), ('no answer for a while', 'n => new Promise(ok => setTimeout(() => ok(null), 1500))'),
+                       ('asking failed', 'async n => { throw new Error("not served"); }')):
+        pg = page('claude', extra=f'window.claude = {{ use: {use} }};'); pg.wait_for_timeout(1800)
+        if not pg.is_visible('#gate'): out.append(f'{label}: no screen saying the log can\'t be reached (mode {pg.evaluate("S.mode")})')
+        else:
+            t = pg.inner_text('#gate-text')
+            if 'shared database' not in t or 'signed in to Claude' not in t: out.append(f'{label}: the screen says {t!r}')
+            if not pg.is_visible('#gate-reload'): out.append(f'{label}: no Reload button')
+            if pg.is_visible('#gate-signin') or pg.is_visible('#gate-other'): out.append(f'{label}: Google sign-in buttons shown')
+        if pg.evaluate('S.mode') == 'local' or pg.evaluate('localStorage.getItem("long-salvage-log-v1")'): out.append(f'{label}: fell back to saving in this browser')
+        if label == 'database refused' and pg.is_visible('#gate-reload'):
+            pg.evaluate("sessionStorage.setItem('reloaded', '1')"); pg.click('#gate-reload'); pg.wait_for_timeout(800)
+            if pg.evaluate("performance.getEntriesByType('navigation')[0].type") != 'reload': out.append('Reload did not reload the page')
+        out += pg.errors; close(pg)
+    # the laptop copy (no Claude, no Firebase) still works from the browser
+    pg = page('local')
+    if pg.is_visible('#gate') or pg.evaluate('S.mode') != 'local' or not pg.evaluate('Object.keys(S.battles).length'): out.append('the laptop copy no longer opens on its own')
+    out += pg.errors; close(pg)
+    # live site offline screen offers Reload
+    pg = page('hosted', extra='window.firebase.firestore = () => { throw new Error("offline"); };'); pg.wait_for_timeout(500)
+    if not pg.is_visible('#gate'): out.append('live site without its database: no screen')
+    elif not pg.is_visible('#gate-reload') or pg.is_visible('#gate-signin'): out.append('live site offline screen: Reload missing or sign-in shown')
+    close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -844,7 +877,8 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'status-while-saving': t_status_while_saving,
          'odd-records': t_odd_records, 'activity-owner': t_activity_owner,
          'messages': t_messages, 'panels-keyboard': t_panels_keyboard,
-         'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out}
+         'print-feedback': t_print_feedback, 'message-size': t_message_size, 'sign-out': t_sign_out,
+         'claude-no-db': t_claude_no_db}
 
 failed = 0
 for name, fn in TESTS.items():
