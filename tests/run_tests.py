@@ -1057,6 +1057,44 @@ def t_lease_clock():
     return out
 
 
+CONTRAST_JS = r"""() => {
+  const parse = c => { const m = c.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p[3] ?? 1]; };
+  const lum = ([r, g, b]) => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+  const bgOf = el => { let layers = []; for (let e = el; e; e = e.parentElement) { const s = getComputedStyle(e); if (s.backgroundImage !== 'none') return null; const c = parse(s.backgroundColor); if (c && c[3] > 0) { layers.push(c); if (c[3] >= 1) break; } }
+    let out = [255, 255, 255]; for (const c of layers.reverse()) out = out.map((v, i) => v * (1 - c[3]) + c[i] * c[3]); return out; };
+  const res = {};
+  for (const el of document.querySelectorAll('#view *, header *, nav *')) {
+    if (!el.offsetParent) continue;
+    const own = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()); if (!own) continue;
+    const s = getComputedStyle(el); const fg = parse(s.color); const bg = bgOf(el); if (!fg || !bg) continue;
+    const f = fg.slice(0, 3).map((v, i) => v * fg[3] + bg[i] * (1 - fg[3]));
+    const L1 = lum(f), L2 = lum(bg), ratio = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+    const size = parseFloat(s.fontSize), bold = parseInt(s.fontWeight) >= 700, large = size >= 24 || (bold && size >= 18.66);
+    const need = large ? 3 : 4.5;
+    if (ratio < need) { const k = (el.className && typeof el.className === 'string' ? el.tagName.toLowerCase() + '.' + el.className.split(' ')[0] : el.tagName.toLowerCase()) + ' ' + s.color + ' on rgb(' + bg.map(Math.round).join(',') + ')';
+      res[k] ||= { ratio: Math.round(ratio * 100) / 100, need, n: 0, eg: el.textContent.trim().slice(0, 40), size }; res[k].n++; }
+  }
+  return res;
+}"""
+
+
+def t_contrast():
+    """Every piece of visible text on every tab, a battle and a post-cycle meets the usual contrast standard against its
+    background (4.5 to 1, or 3 to 1 for large text), in the light and the dark theme."""
+    out = []
+    for scheme in ('light', 'dark'):
+        pg = page('claude'); pg.emulate_media(color_scheme=scheme); pg.evaluate('render()')
+        views = pg.evaluate("() => { const v = []; for (const t of ['battles','gangs','npcs','territories','equipment','rules']) v.push([t, null]); for (const id of Object.keys(S.battles)) v.push(['battles', id]); return v; }")
+        seen = {}
+        for t, sel in views:
+            pg.evaluate('([t, s]) => { S.tab = t; S.sel = s; render(); }', [t, sel]); pg.wait_for_timeout(60)
+            for k, v in pg.evaluate(CONTRAST_JS).items(): seen.setdefault(k, dict(v, where=f'{t}/{sel}'))
+        for k, v in sorted(seen.items(), key=lambda kv: kv[1]['ratio']):
+            out.append(f"{scheme}: {k}: contrast {v['ratio']} (needs {v['need']}), e.g. {v['eg']!r} on {v['where']}")
+        out += pg.errors; close(pg)
+    return out
+
+
 TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_view, 'injection': t_injection,
          'typing-during-save': t_typing_during_save, 'two-editors': t_two_editors, 'critical-injury': t_critical_injury,
          'map-setup': t_map_setup, 'missing-gang': t_missing_gang, 'log-record-purchases': t_log_record_purchases, 'laptop-build': t_laptop_build,
@@ -1070,7 +1108,7 @@ TESTS = {'syntax': t_syntax, 'equipment': t_equipment, 'every-view': t_every_vie
          'claude-no-db': t_claude_no_db, 'no-access': t_no_access, 'tab-keys': t_tab_keys,
          'firestore-restart': t_firestore_restart, 'old-safari-restore': t_old_safari_restore,
          'stale-browser-copy': t_stale_browser_copy, 'random-edits': t_random_edits,
-         'lease-clock': t_lease_clock}
+         'lease-clock': t_lease_clock, 'contrast': t_contrast}
 
 failed = 0
 for name, fn in TESTS.items():
